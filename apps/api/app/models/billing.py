@@ -16,7 +16,7 @@ class Customer(Base):
     """Cliente que recibe la factura electrónica."""
     __tablename__ = "customers"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid64)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
