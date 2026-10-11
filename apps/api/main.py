@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from .db.session import engine
-from .deps import auth
+from app.db.session import engine
+from app.deps import auth
 
 
 @asynccontextmanager
