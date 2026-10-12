@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSON, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -50,8 +50,8 @@ class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     cost_cents: Mapped[int] = mapped_column(default=0, nullable=False)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 4), default=0.19, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="COP", nullable=False)
-    allergens: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
-    tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
+    allergens: Mapped[list[str]] = mapped_column(JSON(String), default=list, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON(String), default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_featured: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

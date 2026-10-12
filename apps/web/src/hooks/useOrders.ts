@@ -24,7 +24,7 @@ export function useCreateOrder() {
       branch_id: string;
       session_id?: string | null;
       channel: string;
-      items: Array<{ product_id: string; quantity: number; notes?: string }>;
+      items: JSON<{ product_id: string; quantity: number; notes?: string }>;
     }) => {
       const { data } = await api.post<Order>('/orders', payload);
       return data;

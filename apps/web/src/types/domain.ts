@@ -39,7 +39,7 @@ export interface OrderItem {
   discount_cents: number;
   total_cents: number;
   status: string;
-  modifiers: Array<Record<string, unknown>>;
+  modifiers: JSON<Record<string, unknown>>;
   notes: string | null;
   kds_station: string | null;
 }

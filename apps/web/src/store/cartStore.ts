@@ -19,7 +19,7 @@ interface CartState {
   subtotalCents: () => number;
   taxCents: () => number;
   totalCents: () => number;
-  toOrderItems: () => Array<Pick<OrderItem, 'product_id' | 'quantity' | 'notes'>>;
+  toOrderItems: () => JSON<Pick<OrderItem, 'product_id' | 'quantity' | 'notes'>>;
 }
 
 export const useCartStore = create<CartState>((set, get) => ({

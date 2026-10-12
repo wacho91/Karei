@@ -91,7 +91,7 @@ export class TableSession {
     return this.status;
   }
 
-  getItems(): ReadonlyArray<OrderItem> {
+  getItems(): ReadonlyJSON<OrderItem> {
     return [...this.items];
   }
 
