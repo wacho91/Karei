@@ -31,10 +31,9 @@ export default function LoginPage() {
         throw new Error(data.detail || 'Error al iniciar sesión');
       }
 
-      // ¡Login exitoso! Guardamos el token en el navegador
-      localStorage.setItem('karei_token', data.access_token);
-      alert('¡Login exitoso! Token JWT guardado.');
-      // En el próximo paso, aquí redirigiremos al Dashboard
+    // ¡Login exitoso! Guardamos el token y redirigimos
+    localStorage.setItem('karei_token', data.access_token);
+    window.location.href = '/'; // Redirige al Dashboard // ¡Login
 
     } catch (err: any) {
       setError(err.message);
