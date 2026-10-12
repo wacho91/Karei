@@ -5,7 +5,8 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func,
 )
-from sqlalchemy.dialects.postgresql import String, JSON, UUID as PGUUID
+from sqlalchemy import String, JSON
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
