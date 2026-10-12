@@ -118,7 +118,7 @@ async def register_restaurant(payload: RegisterIn, db: AsyncSession = Depends(ge
         email=payload.email,
         full_name=payload.full_name,
         password_hash=hashed_pw,
-        status=UserStatus.PENDING, # Pendiente de verificación de correo
+       status=UserStatus.PENDING_VERIFICATION,
         failed_login_count=0,
         mfa_enabled=False
     )
