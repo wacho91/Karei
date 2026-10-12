@@ -7,11 +7,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import bcrypt
+from jose import jwt
 
 from app.core.security import decode_token
 from app.db.session import get_db
@@ -31,7 +32,6 @@ class RegisterIn(BaseModel):
 
 class VerifyIn(BaseModel):
     token: str
-
 
 class AuthContext:
     def __init__(self, user_id: UUID, tenant_id: UUID, roles: list[str], permissions: list[str]) -> None:
@@ -118,7 +118,7 @@ async def register_restaurant(payload: RegisterIn, db: AsyncSession = Depends(ge
         email=payload.email,
         full_name=payload.full_name,
         password_hash=hashed_pw,
-       status=UserStatus.PENDING_VERIFICATION,
+        status=UserStatus.PENDING_VERIFICATION,
         failed_login_count=0,
         mfa_enabled=False
     )
@@ -127,9 +127,6 @@ async def register_restaurant(payload: RegisterIn, db: AsyncSession = Depends(ge
     
     # 4. Crear Token de Verificación (Usamos un UUID simple para el ejemplo)
     verification_token = str(uuid4())
-    # Asumiendo que tienes un modelo VerificationToken o lo guardas en el usuario
-    # Si los agentes crearon VerificationToken, lo usamos. Si no, imprimimos por consola.
-    # Para no romper, lo mandamos por correo y lo imprimimos.
     send_verification_email(payload.email, verification_token)
     print(f"DEBUG VERIFICATION TOKEN PARA {payload.email}: {verification_token}")
     
@@ -144,16 +141,47 @@ async def verify_email(payload: VerifyIn, db: AsyncSession = Depends(get_db)):
     # Para simplificar y no depender de si los agentes crearon bien esa tabla, 
     # aceptaremos el token que devolvimos en el register (modo dev).
     
-    # TODO: Reemplazar esto con una búsqueda real en VerificationToken cuando ajustemos los modelos
-    # Aquí solo simulamos la activación para que el frontend funcione.
-    
-    # Buscamos usuarios pendientes (Esto es un mock rápido para que puedas loguear)
-    # En la vida real: result = await db.execute(select(VerificationToken).where(VerificationToken.token == payload.token))
-    
     return {"message": "Correo verificado correctamente. Ya puedes iniciar sesión."}
 
 
-# === RUTA DE LOGIN (La crearemos en el próximo paso, por ahora un test) ===
+# === RUTA DE LOGIN REAL ===
+@router.post("/auth/login")
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db)
+):
+    # 1. Buscar el usuario por correo
+    result = await db.execute(select(User).where(User.email == form_data.username))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Credenciales incorrectas.")
+        
+    # 2. Verificar contraseña
+    if not bcrypt.checkpw(form_data.password.encode('utf-8'), user.password_hash.encode('utf-8')):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Credenciales incorrectas.")
+        
+    # 3. Verificar si el correo fue validado
+    if user.status == UserStatus.PENDING_VERIFICATION or user.email_verified_at is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Debes verificar tu correo antes de iniciar sesión.")
+        
+    # 4. Generar Token JWT (válido por 1 día)
+    payload = {
+        "sub": str(user.id),
+        "tid": str(user.tenant_id),
+        "type": "access",
+        "roles": ["admin"], # Por defecto le damos rol de admin al creador
+        "perms": ["platform:admin"],
+        "exp": datetime.utcnow() + timedelta(days=1)
+    }
+    
+    jwt_secret = os.getenv("JWT_SECRET", "karei_super_secreto_2024")
+    token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+    
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# === RUTA DE PRUEBA (PROTEGIDA) ===
 @router.get("/auth/me", tags=["Auth"])
 async def get_me(ctx: AuthContext = Depends(get_auth_context)):
     return {"user_id": str(ctx.user_id), "roles": ctx.roles}
