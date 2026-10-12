@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+//import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
 // Página temporal para que Vite no explote y podamos ver el diseño base
 const TempHome = () => (
@@ -12,12 +12,16 @@ const TempHome = () => (
 );
 
 export function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        {/* Mientras no tengamos las páginas creadas, todo va a esta pantalla temporal */}
-        <Route path="*" element={<TempHome />} />
-      </Routes>
-    </BrowserRouter>
-  );
+  return <TempHome />;
 }
+
+//export function App() {
+//  return (
+//    <BrowserRouter>
+//      <Routes>
+//        {/* Mientras no tengamos las páginas creadas, todo va a esta pantalla temporal */}
+//        <Route path="*" element={<TempHome />} />
+//      </Routes>
+//    </BrowserRouter>
+//  );
+//}
