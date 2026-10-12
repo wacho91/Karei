@@ -16,10 +16,10 @@ class TenantStatus(str, Enum):
 
 
 class UserStatus(str, Enum):
-    PENDING_VERIFICATION = "PENDING_VERIFICATION"
-    ACTIVE = "ACTIVE"
-    SUSPENDED = "SUSPENDED"
-    DELETED = "DELETED"
+    PENDING = "pending"        # <--- AGREGA ESTA LÍNEA
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
 
 
 class RoleScope(str, Enum):
