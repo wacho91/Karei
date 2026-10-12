@@ -1,4 +1,5 @@
-//import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
+import LoginPage from './pages/LoginPage';
 
 // Página temporal para que Vite no explote y podamos ver el diseño base
 const TempHome = () => (
@@ -12,7 +13,12 @@ const TempHome = () => (
 );
 
 export function App() {
-  return <TempHome />;
+  return (
+    <Routes>
+      {/* Cualquier ruta que visites, te mostrará el Login por ahora */}
+      <Route path="*" element={<LoginPage />} />
+    </Routes>
+  );
 }
 
 //export function App() {
