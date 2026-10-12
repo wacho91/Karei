@@ -1,36 +1,23 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { AppShell } from '@/components/layout/AppShell';
-import { DashboardPage } from '@/pages/DashboardPage';
-import { TablesPage } from '@/pages/TablesPage';
-import { OrdersPage } from '@/pages/OrdersPage';
-import { KdsPage } from '@/pages/KdsPage';
-import { LoginPage } from '@/pages/LoginPage';
-import { useAuthStore } from '@/store/authStore';
-import { useThemeEffect } from '@/hooks/useThemeEffect';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+
+// Página temporal para que Vite no explote y podamos ver el diseño base
+const TempHome = () => (
+  <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+    <div className="text-center">
+      <h1 className="text-6xl font-bold text-amber-500 mb-4">Kārei 🍜</h1>
+      <p className="text-slate-400 text-xl">SaaS GastroTech de Nivel Enterprise</p>
+      <p className="text-slate-500 text-sm mt-6">Backend conectado. Frontend listo para construir módulos.</p>
+    </div>
+  </div>
+);
 
 export function App() {
-  useThemeEffect();
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-
-  if (!isAuthenticated) {
-    return (
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    );
-  }
-
   return (
-    <AppShell>
+    <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/tables" element={<TablesPage />} />
-        <Route path="/orders" element={<OrdersPage />} />
-        <Route path="/kds" element={<KdsPage />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        {/* Mientras no tengamos las páginas creadas, todo va a esta pantalla temporal */}
+        <Route path="*" element={<TempHome />} />
       </Routes>
-    </AppShell>
+    </BrowserRouter>
   );
 }
