@@ -1,6 +1,9 @@
-   import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink } from 'react-router-dom';
 
 export default function AppLayout() {
+  const linkClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors text-slate-400 hover:bg-slate-800 hover:text-white";
+  const activeClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors bg-amber-500 text-slate-900";
+
   return (
     <div className="min-h-screen bg-slate-900 text-white flex">
       
@@ -12,13 +15,13 @@ export default function AppLayout() {
         </div>
         
         <nav className="flex-1 space-y-2">
-          <NavLink to="/" end className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${isActive ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:bg-slate-800 hover:text-white`}'>
+          <NavLink to="/" end className={({ isActive }) => isActive ? activeClass : linkClass}>
             📊 Dashboard
           </NavLink>
-          <NavLink to="/pos" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${isActive ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:bg-slate-800 hover:text-white`}'>
+          <NavLink to="/pos" className={({ isActive }) => isActive ? activeClass : linkClass}>
             🍽️ POS / Mesas
           </NavLink>
-          <NavLink to="/recetas" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${isActive ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:bg-slate-800 hover:text-white`}'>
+          <NavLink to="/recetas" className={({ isActive }) => isActive ? activeClass : linkClass}>
             📖 Recetas
           </NavLink>
         </nav>
@@ -32,7 +35,7 @@ export default function AppLayout() {
 
       {/* === CONTENIDO PRINCIPAL === */}
       <main className="flex-1 p-8 overflow-y-auto">
-        <Outlet /> {/* Aquí se renderizarán las páginas como el Dashboard */}
+        <Outlet />
       </main>
     </div>
   );
