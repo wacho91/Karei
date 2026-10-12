@@ -134,13 +134,28 @@ async def register_restaurant(payload: RegisterIn, db: AsyncSession = Depends(ge
     return {"message": "Restaurante registrado. Revisa tu correo para verificar tu cuenta.", "dev_token": verification_token}
 
 
-# === RUTA DE VERIFICACIÓN DE CORREO ===
+class VerifyIn(BaseModel):
+    email: str # Cambiamos de token a email para modo dev
+
+# === RUTA DE VERIFICACIÓN DE CORREO (MODO DEV) ===
 @router.post("/auth/verify-email")
 async def verify_email(payload: VerifyIn, db: AsyncSession = Depends(get_db)):
-    # En un escenario real, buscaríamos el token en la tabla verification_tokens
-    # Para simplificar y no depender de si los agentes crearon bien esa tabla, 
-    # aceptaremos el token que devolvimos en el register (modo dev).
+    # Buscamos al usuario por su correo
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
     
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    
+    # Si ya está activo, no hacemos nada
+    if user.status == UserStatus.ACTIVE:
+        return {"message": "Este correo ya estaba verificado."}
+    
+    # Actualizamos el estado a ACTIVE y registramos la fecha de verificación
+    user.status = UserStatus.ACTIVE
+    user.email_verified_at = datetime.utcnow()
+    
+    await db.commit()
     return {"message": "Correo verificado correctamente. Ya puedes iniciar sesión."}
 
 
