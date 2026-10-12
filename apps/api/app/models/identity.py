@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import CITEXT, JSON, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -105,7 +105,7 @@ class Role(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     description: Mapped[str | None] = mapped_column(Text)
     scope: Mapped[RoleScope] = mapped_column(default=RoleScope.TENANT, nullable=False)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    permissions: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    permissions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
     tenant: Mapped["Tenant | None"] = relationship(back_populates="roles")
     user_roles: Mapped[list["UserRole"]] = relationship(back_populates="role", cascade="all, delete-orphan")
