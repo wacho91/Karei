@@ -11,27 +11,32 @@ type Table = {
   items: OrderItem[];
 };
 
-// Datos de prueba (simulando lo que vendrá del backend)
-const initialTables: Table[] = [
-  { id: 1, name: "Mesa 1", status: "OCCUPIED", total: 45000, items: [{ name: "Hamburguesa Doble", quantity: 1, price: 25000 }, { name: "Limonada", quantity: 2, price: 10000 }] },
-  { id: 2, name: "Mesa 2", status: "AVAILABLE", total: 0, items: [] },
-  { id: 3, name: "Mesa 3", status: "BILLING", total: 120000, items: [{ name: "Pasta Carbonara", quantity: 2, price: 45000 }, { name: "Vino Tinto", quantity: 1, price: 30000 }] },
-  { id: 4, name: "Mesa 4", status: "OCCUPIED", total: 89000, items: [{ name: "Pizza Margarita", quantity: 1, price: 35000 }, { name: "Cerveza Artesanal", quantity: 3, price: 18000 }] },
-  { id: 5, name: "Mesa 5", status: "AVAILABLE", total: 0, items: [] },
-  { id: 6, name: "Terraza 1", status: "OCCUPIED", total: 32000, items: [{ name: "Ensalada César", quantity: 1, price: 18000 }, { name: "Agua", quantity: 1, price: 4000 }] },
-];
+// Generamos 25 mesas: 20 internas + 5 terraza
+const initialTables: Table[] = Array.from({ length: 25 }, (_, i) => {
+  const id = i + 1;
+  const isTerrace = i >= 20;
+  const name = isTerrace ? `Terraza ${i - 19}` : `Mesa ${id}`;
+  
+  // Simulamos estados variados
+  const statuses: TableStatus[] = ['AVAILABLE', 'OCCUPIED', 'BILLING'];
+  const status = i % 4 === 0 ? 'OCCUPIED' : (i % 7 === 0 ? 'BILLING' : 'AVAILABLE');
+  const total = status === 'AVAILABLE' ? 0 : Math.floor(Math.random() * 100000) + 15000;
+  const items = status === 'AVAILABLE' ? [] : [{ name: 'Plato del Día', quantity: Math.floor(Math.random() * 3) + 1, price: 25000 }];
+
+  return { id, name, status, total, items };
+});
 
 export default function TablesPage() {
   const [tables] = useState(initialTables);
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
-  const [tipPercent, setTipPercent] = useState(0); // 0%, 10%, 15%
+  const [tipPercent, setTipPercent] = useState(0);
 
   const getStatusStyle = (status: TableStatus) => {
     switch (status) {
-      case "AVAILABLE": return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
-      case "OCCUPIED": return "bg-amber-500/20 text-amber-400 border-amber-500/30";
-      case "BILLING": return "bg-rose-500/20 text-rose-400 border-rose-500/30";
-      default: return "bg-slate-500/20 text-slate-400 border-slate-500/30";
+      case "AVAILABLE": return "border-emerald-500/50 bg-emerald-500/10 text-emerald-400";
+      case "OCCUPIED": return "border-amber-500/50 bg-amber-500/10 text-amber-400";
+      case "BILLING": return "border-rose-500/50 bg-rose-500/10 text-rose-400";
+      default: return "border-slate-500/50 bg-slate-500/10 text-slate-400";
     }
   };
 
@@ -50,34 +55,43 @@ export default function TablesPage() {
   return (
     <div>
       <h1 className="text-3xl font-bold text-white mb-2">POS / Comedor 🍽️</h1>
-      <p className="text-slate-400 mb-8">Selecciona una mesa para ver la cuenta o tomar un pedido.</p>
+      <p className="text-slate-400 mb-8">Mapa del restaurante. Haz clic en una mesa para ver la cuenta.</p>
       
-      <div className="flex gap-6">
+      <div className="flex gap-8">
         
-        {/* === COLUMNA IZQUIERDA: MAPA DE MESAS === */}
-        <div className="w-2/3 grid grid-cols-2 md:grid-cols-3 gap-4">
-          {tables.map((table) => (
-            <div 
-              key={table.id} 
-              onClick={() => setSelectedTable(table)}
-              className={`bg-slate-800/50 p-6 rounded-2xl shadow-sm cursor-pointer transition-all border-2 ${selectedTable?.id === table.id ? 'border-amber-500' : 'border-slate-700 hover:border-slate-500'}`}
-            >
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-white">{table.name}</h2>
-                <span className={`text-xs font-bold px-3 py-1 rounded-full border ${getStatusStyle(table.status)}`}>
-                  {getStatusText(table.status)}
-                </span>
+        {/* === COLUMNA IZQUIERDA: MAPA DE MESAS REDONDAS === */}
+        <div className="w-2/3 bg-slate-800/30 p-6 rounded-2xl border border-slate-700">
+          <h3 className="text-slate-400 text-sm font-bold uppercase mb-4">Zona Interior (20 mesas)</h3>
+          <div className="grid grid-cols-4 sm:grid-cols-5 gap-6 mb-8">
+            {tables.slice(0, 20).map((table) => (
+              <div 
+                key={table.id} 
+                onClick={() => setSelectedTable(table)}
+                className={`w-20 h-20 rounded-full flex flex-col items-center justify-center cursor-pointer border-4 transition-all ${selectedTable?.id === table.id ? 'border-amber-400 scale-110' : getStatusStyle(table.status)} hover:scale-105`}
+              >
+                <span className="text-xs font-bold text-white">{table.name}</span>
+                {table.total > 0 && <span className="text-[10px] text-slate-300">${(table.total / 1000)}k</span>}
               </div>
-              <div className="border-t border-slate-700 pt-3">
-                <p className="text-xs text-slate-400">Consumo</p>
-                <p className="text-xl font-bold text-amber-500">$ {table.total.toLocaleString()}</p>
+            ))}
+          </div>
+
+          <h3 className="text-slate-400 text-sm font-bold uppercase mb-4">Zona Terraza (5 mesas)</h3>
+          <div className="grid grid-cols-4 sm:grid-cols-5 gap-6">
+            {tables.slice(20, 25).map((table) => (
+              <div 
+                key={table.id} 
+                onClick={() => setSelectedTable(table)}
+                className={`w-20 h-20 rounded-full flex flex-col items-center justify-center cursor-pointer border-4 transition-all ${selectedTable?.id === table.id ? 'border-amber-400 scale-110' : getStatusStyle(table.status)} hover:scale-105`}
+              >
+                <span className="text-xs font-bold text-white">{table.name}</span>
+                {table.total > 0 && <span className="text-[10px] text-slate-300">${(table.total / 1000)}k</span>}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         {/* === COLUMNA DERECHA: CUENTA DE MESA === */}
-        <div className="w-1/3 bg-slate-800/50 border border-slate-700 p-6 rounded-2xl shadow-sm flex flex-col">
+        <div className="w-1/3 bg-slate-800/50 border border-slate-700 p-6 rounded-2xl shadow-sm flex flex-col h-[600px] sticky top-8">
           {!selectedTable ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-500">
               <span className="text-5xl mb-4">🛎️</span>
@@ -87,14 +101,14 @@ export default function TablesPage() {
             <>
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-2xl font-bold text-white">{selectedTable.name}</h2>
-                <span className={`text-xs font-bold px-3 py-1 rounded-full border ${getStatusStyle(selectedTable.status)}`}>
+                <span className={`text-xs font-bold px-3 py-1 rounded-full border-2 ${getStatusStyle(selectedTable.status)}`}>
                   {getStatusText(selectedTable.status)}
                 </span>
               </div>
 
               <div className="flex-1 overflow-y-auto mb-4 border-y border-slate-700 py-4">
                 {selectedTable.items.length === 0 ? (
-                  <p className="text-slate-500 text-center text-sm">Mesa libre. Sin consumos.</p>
+                  <p className="text-slate-500 text-center text-sm py-8">Mesa libre. Sin consumos.<br/>¡Ideal para recibir clientes!</p>
                 ) : (
                   <ul className="space-y-3">
                     {selectedTable.items.map((item, index) => (
@@ -128,7 +142,7 @@ export default function TablesPage() {
                   <span className="text-2xl font-extrabold text-amber-500">$ {finalTotal.toLocaleString()}</span>
                 </div>
 
-                <button className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg mt-4 transition-colors disabled:opacity-50" disabled={selectedTable.items.length === 0}>
+                <button className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg mt-4 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedTable.items.length === 0}>
                   💵 Cobrar y Liberar Mesa
                 </button>
               </div>
