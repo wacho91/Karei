@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSON, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import String, JSON, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -72,7 +72,7 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     branch_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("branches.id", ondelete="SET NULL")
     )
-    email: Mapped[str] = mapped_column(CITEXT, nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(32))
