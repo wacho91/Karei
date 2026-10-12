@@ -1,18 +1,46 @@
 import { useState } from 'react';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@karei.com');
+  const [email, setEmail] = useState('criskol.71@gmail.com');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    // Simulamos un login por ahora para probar la vista
-    setTimeout(() => {
+    setError('');
+
+    try {
+      // FastAPI (OAuth2PasswordRequestForm) exige que enviemos los datos como formulario, no como JSON
+      const formData = new URLSearchParams();
+      formData.append('username', email);
+      formData.append('password', password);
+
+      const response = await fetch('http://localhost:8000/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: formData.toString()
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Error al iniciar sesión');
+      }
+
+      // ¡Login exitoso! Guardamos el token en el navegador
+      localStorage.setItem('karei_token', data.access_token);
+      alert('¡Login exitoso! Token JWT guardado.');
+      // En el próximo paso, aquí redirigiremos al Dashboard
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
       setLoading(false);
-      alert('¡Login de prueba! En el próximo paso conectaremos esto al backend.');
-    }, 1000);
+    }
   };
 
   return (
@@ -47,6 +75,12 @@ export default function LoginPage() {
               placeholder="********"
             />
           </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-3 rounded-lg">
+              {error}
+            </div>
+          )}
 
           <button 
             type="submit" 
