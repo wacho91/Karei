@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('criskol.71@gmail.com');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,9 +33,9 @@ export default function LoginPage() {
         throw new Error(data.detail || 'Error al iniciar sesión');
       }
 
-    // ¡Login exitoso! Guardamos el token y redirigimos
-    localStorage.setItem('karei_token', data.access_token);
-    window.location.href = '/'; // Redirige al Dashboard // ¡Login
+      // ¡Login exitoso! Guardamos el token y redirigimos con React Router
+      localStorage.setItem('karei_token', data.access_token);
+      navigate('/'); 
 
     } catch (err: any) {
       setError(err.message);
