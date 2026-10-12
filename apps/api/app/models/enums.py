@@ -16,7 +16,7 @@ class TenantStatus(str, Enum):
 
 
 class UserStatus(str, Enum):
-    PENDING = "pending"        # <--- AGREGA ESTA LÍNEA
+    PENDING_VERIFICATION = "pending"  # <--- CAMBIA ESTA LÍNEA
     ACTIVE = "active"
     SUSPENDED = "suspended"
     DELETED = "deleted"
