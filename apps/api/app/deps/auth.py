@@ -1,7 +1,7 @@
 """Dependencias de autenticación y autorización."""
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,9 @@ from app.models.identity import User
 from app.models.enums import UserStatus
 
 _bearer = HTTPBearer(auto_error=False)
+
+# Creamos el router aquí para que exista, pero la ruta va al final
+router = APIRouter()
 
 
 class AuthContext:
@@ -67,3 +70,9 @@ def require_permission(permission: str):
         return ctx
 
     return _checker
+
+# === Ruta de prueba movida al final ===
+@router.get("/auth/me", tags=["Auth"])
+async def get_me(ctx: AuthContext = Depends(get_auth_context)):
+    return {"user_id": str(ctx.user_id), "roles": ctx.roles}
+# ======================================

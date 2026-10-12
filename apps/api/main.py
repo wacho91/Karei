@@ -5,13 +5,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import engine, Base
 from app.deps import auth
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # === MAGIA: Crear todas las tablas en la base de datos SQLite al arrancar ===
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("✅ Base de datos SQLite y tablas verificadas/creadas.")
+    
     yield
+    
+    # Apagar
     await engine.dispose()
 
 
