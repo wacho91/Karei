@@ -3,10 +3,9 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
-    Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func,
+    Boolean, DateTime, ForeignKey, Integer, JSON, String, Text,
+    UniqueConstraint, Uuid as PGUUID, func,
 )
-from sqlalchemy import String, JSON
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin

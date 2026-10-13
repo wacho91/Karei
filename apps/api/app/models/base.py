@@ -4,11 +4,6 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Uuid as PGUUID, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from uuid import UUID, uuid4
-
-from sqlalchemy import DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
