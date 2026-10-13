@@ -1,49 +1,60 @@
 import { useState } from 'react';
+import { useIngredientes } from '@/hooks/useIngredientes';
+import { useRecetas } from '@/hooks/useRecetas';
+import { IngredienteForm } from '@/components/recetas/ingredienteForm';
+import { IngredienteList } from '@/components/recetas/IngredienteList';
+import { RecetaCard } from '@/components/recetas/RecetaCard';
 
-// Tipos
-type Ingredient = { id: number; name: string; price: number };
-type RecipeItem = { ingredientId: number; name: string; quantity: number; price: number };
-type Recipe = { id: number; name: string; items: RecipeItem[]; cost: number; price: number };
+type ItemTemporal = {
+  ingredient_id: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  costo: number;
+};
 
 export default function RecetasPage() {
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  
-  // Formulario de ingredientes
-  const [ingName, setIngName] = useState('');
-  const [ingPrice, setIngPrice] = useState('');
-  
-  // Formulario de recetas
+  const { ingredientes, error, crear: crearIngrediente, eliminar } = useIngredientes();
+  const { recetas, error: errorRecetas, crear: crearReceta } = useRecetas();
+
   const [recipeName, setRecipeName] = useState('');
   const [selectedIng, setSelectedIng] = useState('');
   const [recipeQty, setRecipeQty] = useState('');
-  const [currentItems, setCurrentItems] = useState<RecipeItem[]>([]);
   const [recipePrice, setRecipePrice] = useState('');
+  const [currentItems, setCurrentItems] = useState<ItemTemporal[]>([]);
 
-  // Lógica Ingredientes
-  const addIngredient = () => {
-    if (!ingName || !ingPrice) return;
-    setIngredients([...ingredients, { id: Date.now(), name: ingName, price: parseFloat(ingPrice) }]);
-    setIngName('');
-    setIngPrice('');
-  };
+  const seleccionado = ingredientes.find((i) => i.id === selectedIng);
+  const costoActual = currentItems.reduce((sum, item) => sum + item.costo, 0);
 
-  // Lógica Recetas
   const addItemToRecipe = () => {
-    const ing = ingredients.find(i => i.id === Number(selectedIng));
-    if (!ing || !recipeQty) return;
-    setCurrentItems([...currentItems, { ingredientId: ing.id, name: ing.name, quantity: parseFloat(recipeQty), price: ing.price }]);
+    if (!seleccionado || !recipeQty || Number(recipeQty) <= 0) return;
+    setCurrentItems([
+      ...currentItems,
+      {
+        ingredient_id: seleccionado.id,
+        name: seleccionado.name,
+        quantity: Number(recipeQty),
+        unit: seleccionado.usage_unit,
+        costo: Number(recipeQty) * seleccionado.cost_per_unit,
+      },
+    ]);
     setSelectedIng('');
     setRecipeQty('');
   };
 
-  const saveRecipe = () => {
-    if (!recipeName || currentItems.length === 0 || !recipePrice) return;
-    const cost = currentItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    setRecipes([...recipes, { id: Date.now(), name: recipeName, items: currentItems, cost, price: parseFloat(recipePrice) }]);
-    setRecipeName('');
-    setCurrentItems([]);
-    setRecipePrice('');
+  const saveRecipe = async () => {
+    if (!recipeName || currentItems.length === 0 || Number(recipePrice) <= 0) return;
+    const ok = await crearReceta({
+      name: recipeName,
+      description: null,
+      price: Number(recipePrice),
+      items: currentItems.map(({ ingredient_id, quantity }) => ({ ingredient_id, quantity })),
+    });
+    if (ok) {
+      setRecipeName('');
+      setCurrentItems([]);
+      setRecipePrice('');
+    }
   };
 
   return (
@@ -51,87 +62,106 @@ export default function RecetasPage() {
       <h1 className="text-3xl font-bold text-white mb-2">Recetas y Food Cost 📖</h1>
       <p className="text-slate-400 mb-8">Registra ingredientes, arma tus platos y calcula tu margen de utilidad.</p>
 
+      {(error || errorRecetas) && (
+        <div className="bg-rose-500/10 border border-rose-500 text-rose-400 p-3 rounded-lg mb-6 text-sm">
+          {error || errorRecetas}
+        </div>
+      )}
+
       <div className="flex gap-8">
         {/* === COLUMNA IZQUIERDA: Ingredientes === */}
         <div className="w-1/3">
-          <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl mb-6">
-            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Nuevo Ingrediente</h3>
-            <input value={ingName} onChange={(e) => setIngName(e.target.value)} placeholder="Ej: Carne molida (1kg)" className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-3 outline-none focus:ring-2 focus:ring-amber-500" />
-            <input value={ingPrice} onChange={(e) => setIngPrice(e.target.value)} type="number" placeholder="Precio ($)" className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500" />
-            <button onClick={addIngredient} className="w-full bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2 rounded-lg transition-colors">+ Agregar</button>
-          </div>
-
-          <div className="bg-slate-800/30 border border-slate-700 p-4 rounded-2xl">
-            <h3 className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-4">Inventario</h3>
-            {ingredients.length === 0 ? <p className="text-slate-500 text-sm py-4 text-center">Sin ingredientes.</p> : (
-              <ul className="space-y-2">
-                {ingredients.map(ing => (
-                  <li key={ing.id} className="flex justify-between text-slate-300 text-sm p-2 bg-slate-900/50 rounded-lg">
-                    <span>{ing.name}</span>
-                    <span className="text-amber-400 font-medium">$ {ing.price.toLocaleString()}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <IngredienteForm onSubmit={crearIngrediente} />
+          <IngredienteList ingredientes={ingredientes} onEliminar={eliminar} />
         </div>
 
-        {/* === COLUMNA DERECHA: Creador de Recetas y Lista === */}
+        {/* === COLUMNA DERECHA: Recetas === */}
         <div className="w-2/3">
           <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl mb-6">
             <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Crear Receta</h3>
-            <input value={recipeName} onChange={(e) => setRecipeName(e.target.value)} placeholder="Nombre del plato (Ej: Hamburguesa)" className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500" />
-            
+
+            <input
+              value={recipeName}
+              onChange={(e) => setRecipeName(e.target.value)}
+              placeholder="Nombre del plato (Ej: Hamburguesa)"
+              className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500"
+            />
+
             <div className="flex gap-2 mb-4">
-              <select value={selectedIng} onChange={(e) => setSelectedIng(e.target.value)} className="w-2/3 bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none">
+              <select
+                value={selectedIng}
+                onChange={(e) => setSelectedIng(e.target.value)}
+                className="w-2/3 bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none"
+              >
                 <option value="">Seleccionar ingrediente...</option>
-                {ingredients.map(ing => <option key={ing.id} value={ing.id}>{ing.name}</option>
-                )}
+                {ingredientes.map((ing) => (
+                  <option key={ing.id} value={ing.id}>
+                    {ing.name} (${ing.cost_per_unit}/{ing.usage_unit})
+                  </option>
+                ))}
               </select>
-              <input value={recipeQty} onChange={(e) => setRecipeQty(e.target.value)} type="number" placeholder="Cant." className="w-1/3 bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500" />
-              <button onClick={addItemToRecipe} className="bg-slate-700 hover:bg-slate-600 text-white px-4 rounded-lg transition-colors">+</button>
+              <input
+                type="number" min={0} step="any"
+                value={recipeQty}
+                onChange={(e) => setRecipeQty(e.target.value)}
+                placeholder={seleccionado ? `Cant. (${seleccionado.usage_unit})` : 'Cant.'}
+                className="w-1/3 bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <button
+                onClick={addItemToRecipe}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-4 rounded-lg transition-colors"
+              >
+                +
+              </button>
             </div>
 
             <div className="mb-4 bg-slate-900/50 p-4 rounded-lg border border-slate-700 min-h-[80px]">
-              {currentItems.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Agrega items a la receta.</p> : (
+              {currentItems.length === 0 ? (
+                <p className="text-slate-500 text-sm text-center py-4">Agrega items a la receta.</p>
+              ) : (
                 <ul className="space-y-2">
-                  {currentItems.map((item, index) => (
-                    <li key={index} className="flex justify-between text-slate-300 text-sm">
-                      <span>{item.quantity} x {item.name}</span>
-                      <span className="text-amber-400">$ {(item.quantity * item.price).toLocaleString()}</span>
+                  {currentItems.map((item, i) => (
+                    <li key={i} className="flex justify-between text-slate-300 text-sm">
+                      <span>{item.quantity} {item.unit} de {item.name}</span>
+                      <span className="text-amber-400">${item.costo.toLocaleString()}</span>
                     </li>
                   ))}
                 </ul>
               )}
+              {currentItems.length > 0 && (
+                <p className="text-right text-xs text-slate-400 mt-3 border-t border-slate-700 pt-2">
+                  Costo total: <span className="text-white font-bold">${costoActual.toLocaleString()}</span>
+                </p>
+              )}
             </div>
 
-            <input value={recipePrice} onChange={(e) => setRecipePrice(e.target.value)} type="number" placeholder="Precio de Venta ($)" className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500" />
-            <button onClick={saveRecipe} className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg transition-colors">💾 Guardar Receta</button>
+            <input
+              type="number" min={0}
+              value={recipePrice}
+              onChange={(e) => setRecipePrice(e.target.value)}
+              placeholder="Precio de Venta ($)"
+              className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500"
+            />
+            <button
+              onClick={saveRecipe}
+              className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg transition-colors"
+            >
+              💾 Guardar Receta
+            </button>
           </div>
 
-          {/* Lista de Recetas Guardadas */}
           <div className="bg-slate-800/30 border border-slate-700 p-6 rounded-2xl">
             <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Menú del Restaurante</h3>
-            {recipes.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Aún no has creado recetas.</p> : (
+            {recetas.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center py-4">Aún no has creado recetas.</p>
+            ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {recipes.map(recipe => {
-                  const margin = recipe.price > 0 ? ((recipe.price - recipe.cost) / recipe.price) * 100 : 0;
-                  const marginColor = margin > 65 ? 'text-emerald-400' : margin > 40 ? 'text-amber-400' : 'text-rose-400';
-                  return (
-                    <div key={recipe.id} className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl">
-                      <h4 className="text-lg font-bold text-white mb-2">{recipe.name}</h4>
-                      <div className="space-y-1 text-xs text-slate-400">
-                        <p>Costo: <span className="text-white font-medium">$ {recipe.cost.toLocaleString()}</span></p>
-                        <p>Venta: <span className="text-white font-medium">$ {recipe.price.toLocaleString()}</span></p>
-                        <p>Margen: <span className={`font-bold ${marginColor}`}>{margin.toFixed(1)}%</span></p>
-                      </div>
-                    </div>
-                  );
-                })}
+                {recetas.map((receta) => (
+                  <RecetaCard key={receta.id} receta={receta} />
+                ))}
               </div>
             )}
           </div>
-
         </div>
       </div>
     </div>
