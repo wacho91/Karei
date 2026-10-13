@@ -8,17 +8,18 @@ from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
 from app.deps import auth
+from app.routers import inventory_router  # ← NUEVO
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # === MAGIA: Crear todas las tablas en la base de datos SQLite al arrancar ===
+    # Crear todas las tablas en la base de datos al arrancar
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("✅ Base de datos SQLite y tablas verificadas/creadas.")
-    
+
     yield
-    
+
     # Apagar
     await engine.dispose()
 
@@ -39,6 +40,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(inventory_router.router, prefix="/api/v1")  # ← NUEVO
 
 
 @app.get("/health", tags=["system"])
