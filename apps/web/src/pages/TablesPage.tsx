@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-// Tipos
 type OrderItem = { name: string; quantity: number; price: number };
 type TableStatus = 'AVAILABLE' | 'OCCUPIED' | 'BILLING';
 type Table = {
@@ -11,52 +10,60 @@ type Table = {
   items: OrderItem[];
 };
 
-// Generamos 25 mesas: 20 internas + 5 terraza
+// Generamos 25 mesas redondas
 const initialTables: Table[] = Array.from({ length: 25 }, (_, i) => {
   const id = i + 1;
   const isTerrace = i >= 20;
   const name = isTerrace ? `Terraza ${i - 19}` : `Mesa ${id}`;
-  
   const status = i % 4 === 0 ? 'OCCUPIED' : (i % 7 === 0 ? 'BILLING' : 'AVAILABLE');
   const total = status === 'AVAILABLE' ? 0 : Math.floor(Math.random() * 100000) + 15000;
   const items = status === 'AVAILABLE' ? [] : [{ name: 'Plato del Día', quantity: Math.floor(Math.random() * 3) + 1, price: 25000 }];
-
   return { id, name, status, total, items };
 });
+
+// Componente visual de la Mesa Real
+const TableNode = ({ table, isSelected, onClick }: { table: Table; isSelected: boolean; onClick: () => void }) => {
+  const statusColors = {
+    AVAILABLE: 'border-emerald-500/40 bg-slate-800/60 text-white shadow-emerald-500/10',
+    OCCUPIED: 'border-amber-500/50 bg-slate-800/60 text-white shadow-amber-500/10',
+    BILLING: 'border-rose-500/50 bg-slate-800/60 text-white shadow-rose-500/10',
+  };
+  
+  const dotColors = {
+    AVAILABLE: 'bg-emerald-400 shadow-emerald-300',
+    OCCUPIED: 'bg-amber-400 shadow-amber-300',
+    BILLING: 'bg-rose-400 shadow-rose-300',
+  };
+
+  const statusText = {
+    AVAILABLE: 'Libre',
+    OCCUPIED: 'Ocupada',
+    BILLING: 'Cobrando',
+  };
+
+  return (
+    <div 
+      onClick={onClick}
+      className={`relative w-24 h-24 rounded-full border-4 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 shadow-lg ${isSelected ? 'scale-110 border-amber-400 ring-4 ring-amber-400/30' : statusColors[table.status]} hover:scale-105 hover:shadow-xl`}
+      style={{ backgroundImage: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.2) 70%)' }}
+    >
+      {/* Indicador tipo "Vela/LED" */}
+      <span className={`absolute top-2 w-3 h-3 rounded-full shadow-md animate-pulse ${dotColors[table.status]}`}></span>
+      
+      <span className="text-lg font-extrabold text-white tracking-tight">{table.name.replace('Mesa ', '').replace('Terraza ', 'T')}</span>
+      {table.total > 0 ? (
+        <span className="text-[11px] font-bold text-amber-400">$ {(table.total / 1000).toFixed(0)}k</span>
+      ) : (
+        <span className="text-[10px] text-slate-400">{statusText[table.status]}</span>
+      )}
+    </div>
+  );
+};
 
 export default function TablesPage() {
   const [tables] = useState(initialTables);
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [tipPercent, setTipPercent] = useState(0);
-
-  // Estilos para el borde y fondo de la tarjeta según el estado
-  const getStatusStyle = (status: TableStatus) => {
-    switch (status) {
-      case "AVAILABLE": return "border-slate-600/50 bg-slate-800/40 hover:border-emerald-500/50";
-      case "OCCUPIED": return "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60";
-      case "BILLING": return "border-rose-500/30 bg-rose-500/5 hover:border-rose-500/60";
-      default: return "border-slate-600/50 bg-slate-800/40";
-    }
-  };
-
-  // Color del indicador (punto de luz)
-  const getDotColor = (status: TableStatus) => {
-    switch (status) {
-      case "AVAILABLE": return "bg-emerald-400 shadow-emerald-400/50";
-      case "OCCUPIED": return "bg-amber-400 shadow-amber-400/50";
-      case "BILLING": return "bg-rose-400 shadow-rose-400/50";
-      default: return "bg-slate-400";
-    }
-  };
-
-  const getStatusText = (status: TableStatus) => {
-    switch (status) {
-      case "AVAILABLE": return "Libre";
-      case "OCCUPIED": return "Ocupada";
-      case "BILLING": return "Cobrando";
-      default: return status;
-    }
-  };
 
   const tipAmount = selectedTable ? (selectedTable.total * tipPercent) / 100 : 0;
   const finalTotal = selectedTable ? selectedTable.total + tipAmount : 0;
@@ -68,55 +75,38 @@ export default function TablesPage() {
       
       <div className="flex gap-8">
         
-        {/* === COLUMNA IZQUIERDA: MAPA DE MESAS === */}
-        <div className="w-2/3 bg-slate-800/20 p-6 rounded-2xl border border-slate-700/50">
-          <h3 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-6">Zona Interior (20 mesas)</h3>
-          <div className="grid grid-cols-4 sm:grid-cols-5 gap-5 mb-10">
-            {tables.slice(0, 20).map((table) => (
-              <div 
-                key={table.id} 
-                onClick={() => setSelectedTable(table)}
-                className={`relative h-28 rounded-xl border-2 flex flex-col items-center justify-center gap-1 cursor-pointer transition-all duration-300 shadow-sm hover:shadow-lg hover:-translate-y-1 ${selectedTable?.id === table.id ? 'border-amber-400 bg-slate-800 shadow-amber-500/20 scale-105' : getStatusStyle(table.status)}`}
-              >
-                {/* Indicador de estado (Punto de luz) */}
-                <span className={`absolute top-3 right-3 w-3 h-3 rounded-full shadow-md ${getDotColor(table.status)}`}></span>
-                
-                <span className="text-base font-bold text-white">{table.name}</span>
-                {table.total > 0 ? (
-                  <span className="text-sm font-medium text-amber-500">$ {(table.total / 1000).toFixed(0)}k</span>
-                ) : (
-                  <span className="text-xs text-slate-500">Libre</span>
-                )}
-              </div>
-            ))}
+        {/* === COLUMNA IZQUIERDA: PLANO DEL COMEDOR === */}
+        <div className="w-2/3 bg-slate-800/10 p-8 rounded-2xl border border-slate-700/30 shadow-inner" style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '24px 24px' }}>
+          
+          <div className="mb-12">
+            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-6 flex items-center gap-2">
+              <span className="w-2 h-2 bg-amber-500 rounded-full"></span> Zona Interior
+            </h3>
+            <div className="grid grid-cols-4 sm:grid-cols-5 gap-8 justify-items-center">
+              {tables.slice(0, 20).map((table) => (
+                <TableNode key={table.id} table={table} isSelected={selectedTable?.id === table.id} onClick={() => setSelectedTable(table)} />
+              ))}
+            </div>
           </div>
 
-          <h3 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-6">Zona Terraza (5 mesas)</h3>
-          <div className="grid grid-cols-4 sm:grid-cols-5 gap-5">
-            {tables.slice(20, 25).map((table) => (
-              <div 
-                key={table.id} 
-                onClick={() => setSelectedTable(table)}
-                className={`relative h-28 rounded-xl border-2 flex flex-col items-center justify-center gap-1 cursor-pointer transition-all duration-300 shadow-sm hover:shadow-lg hover:-translate-y-1 ${selectedTable?.id === table.id ? 'border-amber-400 bg-slate-800 shadow-amber-500/20 scale-105' : getStatusStyle(table.status)}`}
-              >
-                <span className={`absolute top-3 right-3 w-3 h-3 rounded-full shadow-md ${getDotColor(table.status)}`}></span>
-                <span className="text-base font-bold text-white">{table.name}</span>
-                {table.total > 0 ? (
-                  <span className="text-sm font-medium text-amber-500">$ {(table.total / 1000).toFixed(0)}k</span>
-                ) : (
-                  <span className="text-xs text-slate-500">Libre</span>
-                )}
-              </div>
-            ))}
+          <div className="border-t border-slate-700/50 pt-10">
+            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-6 flex items-center gap-2">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full"></span> Zona Terraza
+            </h3>
+            <div className="grid grid-cols-4 sm:grid-cols-5 gap-8 justify-items-center">
+              {tables.slice(20, 25).map((table) => (
+                <TableNode key={table.id} table={table} isSelected={selectedTable?.id === table.id} onClick={() => setSelectedTable(table)} />
+              ))}
+            </div>
           </div>
         </div>
 
         {/* === COLUMNA DERECHA: CUENTA DE MESA === */}
-        <div className="w-1/3 bg-slate-800/50 border border-slate-700 p-6 rounded-2xl shadow-sm flex flex-col h-[650px] sticky top-8">
+        <div className="w-1/3 bg-slate-800/50 border border-slate-700 p-6 rounded-2xl shadow-sm flex flex-col h-[700px] sticky top-8 backdrop-blur-sm">
           {!selectedTable ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-500">
               <span className="text-6xl mb-6">🛎️</span>
-              <p className="text-lg font-medium">Selecciona una mesa</p>
+              <p className="text-lg font-medium text-slate-400">Selecciona una mesa</p>
               <p className="text-sm text-slate-600">para ver la cuenta en vivo.</p>
             </div>
           ) : (
@@ -124,11 +114,11 @@ export default function TablesPage() {
               <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-700">
                 <div>
                   <h2 className="text-2xl font-bold text-white">{selectedTable.name}</h2>
-                  <p className={`text-xs font-bold uppercase tracking-wider mt-1 ${getStatusText(selectedTable.status) === 'Libre' ? 'text-emerald-400' : getStatusText(selectedTable.status) === 'Cobrando' ? 'text-rose-400' : 'text-amber-400'}`}>
-                    {getStatusText(selectedTable.status)}
+                  <p className={`text-xs font-bold uppercase tracking-wider mt-1 ${selectedTable.status === 'AVAILABLE' ? 'text-emerald-400' : selectedTable.status === 'BILLING' ? 'text-rose-400' : 'text-amber-400'}`}>
+                    {selectedTable.status === 'AVAILABLE' ? 'Libre' : selectedTable.status === 'BILLING' ? 'Cobrando' : 'Ocupada'}
                   </p>
                 </div>
-                <div className={`w-5 h-5 rounded-full shadow-md ${getDotColor(selectedTable.status)}`}></div>
+                <div className={`w-6 h-6 rounded-full shadow-md ${selectedTable.status === 'AVAILABLE' ? 'bg-emerald-400 shadow-emerald-400/50' : selectedTable.status === 'BILLING' ? 'bg-rose-400 shadow-rose-400/50' : 'bg-amber-400 shadow-amber-400/50'}`}></div>
               </div>
 
               <div className="flex-1 overflow-y-auto mb-4 py-2">
