@@ -47,7 +47,7 @@ async def create_recipe(
     return await _obtener_response(db, tenant_id, receta.id)
 
 
-async def calculate_cost(receta: Recipe) -> Decimal:
+def calculate_cost(receta: Recipe) -> Decimal:
     """Costo = suma de (cantidad en usage_unit x costo por unidad del ingrediente)."""
     return sum(
         (item.quantity * item.ingredient.cost_per_unit for item in receta.items),
