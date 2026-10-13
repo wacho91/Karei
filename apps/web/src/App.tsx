@@ -2,8 +2,9 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
-import TablesPage from './pages/TablesPage';
 import ProductsPage from './pages/ProductsPage';
+import TablesPage from './pages/TablesPage';
+import RecetasPage from './pages/RecetasPage';
 
 export function App() {
   const token = localStorage.getItem('karei_token');
@@ -14,9 +15,9 @@ export function App() {
       
       <Route path="/" element={token ? <AppLayout /> : <Navigate to="/login" />}>
         <Route index element={<DashboardPage />} />
-        {/* Nueva ruta del POS */}
-        <Route path="pos" element={<TablesPage />} />
         <Route path="nuevo-pedido" element={<ProductsPage />} />
+        <Route path="pos" element={<TablesPage />} />
+        <Route path="recetas" element={<RecetasPage />} />
       </Route>
     </Routes>
   );
