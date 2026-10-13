@@ -18,14 +18,14 @@ export default function AppLayout() {
           <NavLink to="/" end className={({ isActive }) => isActive ? activeClass : linkClass}>
             📊 Dashboard
           </NavLink>
+          <NavLink to="/nuevo-pedido" className={({ isActive }) => isActive ? activeClass : linkClass}>
+            📝 Nuevo Pedido
+          </NavLink>
           <NavLink to="/pos" className={({ isActive }) => isActive ? activeClass : linkClass}>
             🍽️ POS / Mesas
           </NavLink>
           <NavLink to="/recetas" className={({ isActive }) => isActive ? activeClass : linkClass}>
             📖 Recetas
-          </NavLink>
-          <NavLink to="/nuevo-pedido" className={({ isActive }) => isActive ? activeClass : linkClass}>
-            📝 Nuevo Pedido
           </NavLink>
         </nav>
         
