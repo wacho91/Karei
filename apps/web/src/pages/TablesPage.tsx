@@ -41,21 +41,37 @@ const TableNode = ({ table, isSelected, onClick }: { table: Table; isSelected: b
     BILLING: 'Cobrando',
   };
 
+  const isTerrace = table.name.includes('Terraza');
+
   return (
-    <div 
-      onClick={onClick}
-      className={`relative w-24 h-24 rounded-full border-4 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 shadow-lg ${isSelected ? 'scale-110 border-amber-400 ring-4 ring-amber-400/30' : statusColors[table.status]} hover:scale-105 hover:shadow-xl`}
-      style={{ backgroundImage: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.2) 70%)' }}
-    >
-      {/* Indicador tipo "Vela/LED" */}
-      <span className={`absolute top-2 w-3 h-3 rounded-full shadow-md animate-pulse ${dotColors[table.status]}`}></span>
+    <div className="relative flex flex-col items-center justify-end h-32">
       
-      <span className="text-lg font-extrabold text-white tracking-tight">{table.name.replace('Mesa ', '').replace('Terraza ', 'T')}</span>
-      {table.total > 0 ? (
-        <span className="text-[11px] font-bold text-amber-400">$ {(table.total / 1000).toFixed(0)}k</span>
-      ) : (
-        <span className="text-[10px] text-slate-400">{statusText[table.status]}</span>
+      {/* === SOMBRILLA (Solo para Terraza) === */}
+      {isTerrace && (
+        <div className={`absolute top-0 transition-transform ${isSelected ? 'text-amber-400 scale-110' : 'text-slate-500'}`}>
+          <svg width="32" height="18" viewBox="0 0 32 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 0C7 0 1 6 0 14H32C31 6 25 0 16 0Z" fill="currentColor" opacity="0.6"/>
+            <rect x="15" y="14" width="2" height="4" fill="currentColor" opacity="0.8"/>
+          </svg>
+        </div>
       )}
+
+      {/* === MESA REDONDA === */}
+      <div 
+        onClick={onClick}
+        className={`relative w-24 h-24 mt-6 rounded-full border-4 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 shadow-lg ${isSelected ? 'scale-110 border-amber-400 ring-4 ring-amber-400/30' : statusColors[table.status]} hover:scale-105 hover:shadow-xl`}
+        style={{ backgroundImage: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.2) 70%)' }}
+      >
+        {/* Indicador tipo "Vela/LED" */}
+        <span className={`absolute top-2 w-3 h-3 rounded-full shadow-md animate-pulse ${dotColors[table.status]}`}></span>
+        
+        <span className="text-lg font-extrabold text-white tracking-tight">{table.name.replace('Mesa ', '').replace('Terraza ', 'T')}</span>
+        {table.total > 0 ? (
+          <span className="text-[11px] font-bold text-amber-400">$ {(table.total / 1000).toFixed(0)}k</span>
+        ) : (
+          <span className="text-[10px] text-slate-400">{statusText[table.status]}</span>
+        )}
+      </div>
     </div>
   );
 };
