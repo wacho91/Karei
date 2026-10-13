@@ -24,6 +24,9 @@ export default function AppLayout() {
           <NavLink to="/recetas" className={({ isActive }) => isActive ? activeClass : linkClass}>
             📖 Recetas
           </NavLink>
+          <NavLink to="/nuevo-pedido" className={({ isActive }) => isActive ? activeClass : linkClass}>
+            📝 Nuevo Pedido
+          </NavLink>
         </nav>
         
         <div className="mt-auto pt-4 border-t border-slate-800">

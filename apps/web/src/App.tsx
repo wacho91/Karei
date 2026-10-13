@@ -15,6 +15,7 @@ export function App() {
         <Route index element={<DashboardPage />} />
         {/* Nueva ruta del POS */}
         <Route path="pos" element={<TablesPage />} />
+        <Route path="nuevo-pedido" element={<ProductsPage />} />
       </Route>
     </Routes>
   );
