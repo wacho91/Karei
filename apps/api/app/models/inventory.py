@@ -1,72 +1,78 @@
-import uuid
-from datetime import datetime
+"""Bounded Context: Inventory — Ingredientes, Recetas y Mermas."""
 from decimal import Decimal
-from sqlalchemy import String, Numeric, DateTime, Boolean, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID
+from uuid import UUID
+
+from sqlalchemy import Boolean, ForeignKey, Numeric, String
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-# Importamos Base igual que en los anteriores
-try:
-    from app.models.base import Base
-except ImportError:
-    from app.db.session import Base
+from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
-class Ingredient(Base):
-    """Insumos o materias primas en la bodega (ej. Carne, Tomate)."""
+class Ingredient(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Materia prima. Se COMPRA en una unidad y se USA en otra.
+
+    Ej: Compro 1 KG de carne a $9.000 -> trae 1000 G -> costo real $9/G.
+    """
     __tablename__ = "ingredients"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    unit_measure: Mapped[str] = mapped_column(String(20), nullable=False, default="KG") # KG, GR, LT, UND
-    stock: Mapped[Decimal] = mapped_column(Numeric(10, 3), default=Decimal("0"), nullable=False)
-    cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"), nullable=False)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # --- Compra (lo que llega del proveedor) ---
+    purchase_unit: Mapped[str] = mapped_column(String(20), nullable=False, default="KG")
+    purchase_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    content_qty: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False, default=Decimal("1"))
+
+    # --- Uso (cómo se consume en las recetas) ---
+    usage_unit: Mapped[str] = mapped_column(String(20), nullable=False, default="G")
+    cost_per_unit: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal("0"))
+
+    # --- Inventario (siempre en usage_unit) ---
+    stock: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=Decimal("0"))
+    min_stock: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=Decimal("0"))
+
+    recipe_items: Mapped[list["RecipeItem"]] = relationship(back_populates="ingredient")
 
 
-class Recipe(Base):
-    """Las recetas o platos del menú que se venden a los clientes."""
+class Recipe(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Plato del menú. Su costo se calcula dinámicamente desde sus items."""
     __tablename__ = "recipes"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(500))
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False) # Si se muestra en el menú QR
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    # Relación con los ingredientes que la componen
-    ingredients: Mapped[list["RecipeItem"]] = relationship(back_populates="recipe", cascade="all, delete-orphan")
+    items: Mapped[list["RecipeItem"]] = relationship(
+        back_populates="recipe", cascade="all, delete-orphan"
+    )
 
 
-class RecipeItem(Base):
-    """Cantidad exacta de un ingrediente que lleva una receta (Ej. 150g de Carne)."""
+class RecipeItem(Base, UUIDPrimaryKeyMixin):
+    """Cantidad de un ingrediente en la receta (en su usage_unit. Ej: 250 G)."""
     __tablename__ = "recipe_items"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    recipe_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("recipes.id"), nullable=False)
-    ingredient_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingredients.id"), nullable=False)
-    
+    recipe_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False
+    )
+    ingredient_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ingredients.id", ondelete="RESTRICT"), nullable=False
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
-    
-    recipe: Mapped["Recipe"] = relationship(back_populates="ingredients")
+
+    recipe: Mapped["Recipe"] = relationship(back_populates="items")
+    ingredient: Mapped["Ingredient"] = relationship(back_populates="recipe_items")
 
 
-class Waste(Base):
-    """Registro de mermas (comida que se pudrió, se tiró o se quemó)."""
+class Waste(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Merma: comida que se pudrió, se tiró o se quemó."""
     __tablename__ = "wastes"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    ingredient_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingredients.id"), nullable=False)
-    
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    ingredient_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ingredients.id", ondelete="CASCADE"), nullable=False
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
-    reason: Mapped[str | None] = mapped_column(String(255), nullable=True) # Ej. "Se pudrió"
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(255))
