@@ -3,6 +3,7 @@ import LoginPage from './pages/LoginPage';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import TablesPage from './pages/TablesPage';
+import ProductsPage from './pages/ProductsPage';
 
 export function App() {
   const token = localStorage.getItem('karei_token');
