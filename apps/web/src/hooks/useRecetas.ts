@@ -41,5 +41,16 @@ export const useRecetas = () => {
     }
   };
 
-  return { recetas, cargando, error, crear };
+  const actualizar = async (id: string, datos: RecetaInput): Promise<boolean> => {
+    try {
+      await api.put(`/inventory/recipes/${id}`, datos);
+      await cargar();
+      return true;
+    } catch (err) {
+      setError(extraerError(err, 'Error al actualizar la receta'));
+      return false;
+    }
+  };
+
+  return { recetas, cargando, error, crear, actualizar };
 };

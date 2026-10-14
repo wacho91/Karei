@@ -1,11 +1,13 @@
-import type { Ingrediente } from "../../types/inventario";
+import type { Ingrediente } from '@/types/inventario';
 
 interface Props {
   ingredientes: Ingrediente[];
+  onEditar: (ing: Ingrediente) => void;
+  onComprar: (ing: Ingrediente) => void;
   onEliminar: (id: string) => void;
 }
 
-export const IngredienteList = ({ ingredientes, onEliminar }: Props) => (
+export const IngredienteList = ({ ingredientes, onEditar, onComprar, onEliminar }: Props) => (
   <div className="bg-slate-800/30 border border-slate-700 p-4 rounded-2xl">
     <h3 className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-4">Inventario</h3>
     {ingredientes.length === 0 ? (
@@ -23,15 +25,14 @@ export const IngredienteList = ({ ingredientes, onEliminar }: Props) => (
                   {alerta && <span className="text-rose-400 font-bold"> ⚠️ Bajo</span>}
                 </p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <span className="text-amber-400 font-medium">${ing.purchase_price.toLocaleString()}</span>
-                <button
-                  onClick={() => onEliminar(ing.id)}
-                  className="text-slate-600 hover:text-rose-400 transition-colors"
-                  title="Eliminar"
-                >
-                  🗑️
-                </button>
+                <button onClick={() => onComprar(ing)} title="Registrar compra"
+                  className="text-slate-600 hover:text-emerald-400 transition-colors">📥</button>
+                <button onClick={() => onEditar(ing)} title="Editar"
+                  className="text-slate-600 hover:text-amber-400 transition-colors">✏️</button>
+                <button onClick={() => onEliminar(ing.id)} title="Eliminar"
+                  className="text-slate-600 hover:text-rose-400 transition-colors">🗑️</button>
               </div>
             </li>
           );

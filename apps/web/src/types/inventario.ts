@@ -22,6 +22,11 @@ export type IngredienteInput = {
   min_stock: number;
 };
 
+export type CompraInput = {
+  quantity: number;
+  purchase_price: number | null;
+};
+
 export type Receta = {
   id: string;
   name: string;

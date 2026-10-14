@@ -3,7 +3,9 @@ import { useIngredientes } from '@/hooks/useIngredientes';
 import { useRecetas } from '@/hooks/useRecetas';
 import { IngredienteForm } from '@/components/recetas/ingredienteForm';
 import { IngredienteList } from '@/components/recetas/IngredienteList';
+import { CompraModal } from '@/components/recetas/CompraModal';
 import { RecetaCard } from '@/components/recetas/RecetaCard';
+import type { Ingrediente, Receta } from '@/types/inventario';
 
 type ItemTemporal = {
   ingredient_id: string;
@@ -14,8 +16,18 @@ type ItemTemporal = {
 };
 
 export default function RecetasPage() {
-  const { ingredientes, error, crear: crearIngrediente, eliminar } = useIngredientes();
-  const { recetas, error: errorRecetas, crear: crearReceta } = useRecetas();
+  const {
+    ingredientes, error,
+    crear: crearIngrediente,
+    actualizar: actualizarIngrediente,
+    registrarCompra,
+    eliminar,
+  } = useIngredientes();
+  const { recetas, error: errorRecetas, crear: crearReceta, actualizar: actualizarReceta } = useRecetas();
+
+  const [editandoIng, setEditandoIng] = useState<Ingrediente | null>(null);
+  const [comprandoIng, setComprandoIng] = useState<Ingrediente | null>(null);
+  const [editandoReceta, setEditandoReceta] = useState<Receta | null>(null);
 
   const [recipeName, setRecipeName] = useState('');
   const [selectedIng, setSelectedIng] = useState('');
@@ -42,19 +54,49 @@ export default function RecetasPage() {
     setRecipeQty('');
   };
 
+  const cargarRecetaEnFormulario = (receta: Receta) => {
+    setEditandoReceta(receta);
+    setRecipeName(receta.name);
+    setRecipePrice(String(receta.price));
+    setCurrentItems(
+      receta.items.map((item) => {
+        const ing = ingredientes.find((i) => i.id === item.ingredient_id);
+        return {
+          ingredient_id: item.ingredient_id,
+          name: ing?.name ?? 'Ingrediente eliminado',
+          quantity: item.quantity,
+          unit: ing?.usage_unit ?? '',
+          costo: item.quantity * (ing?.cost_per_unit ?? 0),
+        };
+      }),
+    );
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const limpiarFormularioReceta = () => {
+    setEditandoReceta(null);
+    setRecipeName('');
+    setCurrentItems([]);
+    setRecipePrice('');
+  };
+
   const saveRecipe = async () => {
     if (!recipeName || currentItems.length === 0 || Number(recipePrice) <= 0) return;
-    const ok = await crearReceta({
+    const datos = {
       name: recipeName,
-      description: null,
+      description: editandoReceta?.description ?? null,
       price: Number(recipePrice),
       items: currentItems.map(({ ingredient_id, quantity }) => ({ ingredient_id, quantity })),
-    });
-    if (ok) {
-      setRecipeName('');
-      setCurrentItems([]);
-      setRecipePrice('');
-    }
+    };
+    const ok = editandoReceta
+      ? await actualizarReceta(editandoReceta.id, datos)
+      : await crearReceta(datos);
+    if (ok) limpiarFormularioReceta();
+  };
+
+  const handleCompra = async (cantidad: number, precioNuevo: number | null): Promise<boolean> => {
+    if (!comprandoIng) return false;
+    return registrarCompra(comprandoIng.id, { quantity: cantidad, purchase_price: precioNuevo });
   };
 
   return (
@@ -68,17 +110,33 @@ export default function RecetasPage() {
         </div>
       )}
 
+      {comprandoIng && (
+        <CompraModal ingrediente={comprandoIng} onClose={() => setComprandoIng(null)} onConfirm={handleCompra} />
+      )}
+
       <div className="flex gap-8">
         {/* === COLUMNA IZQUIERDA: Ingredientes === */}
         <div className="w-1/3">
-          <IngredienteForm onSubmit={crearIngrediente} />
-          <IngredienteList ingredientes={ingredientes} onEliminar={eliminar} />
+          <IngredienteForm
+            onCreate={crearIngrediente}
+            onUpdate={actualizarIngrediente}
+            editando={editandoIng}
+            onCancelarEdicion={() => setEditandoIng(null)}
+          />
+          <IngredienteList
+            ingredientes={ingredientes}
+            onEditar={setEditandoIng}
+            onComprar={setComprandoIng}
+            onEliminar={eliminar}
+          />
         </div>
 
         {/* === COLUMNA DERECHA: Recetas === */}
         <div className="w-2/3">
           <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl mb-6">
-            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Crear Receta</h3>
+            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">
+              {editandoReceta ? '✏️ Editando Receta' : 'Crear Receta'}
+            </h3>
 
             <input
               value={recipeName}
@@ -142,12 +200,23 @@ export default function RecetasPage() {
               placeholder="Precio de Venta ($)"
               className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500"
             />
-            <button
-              onClick={saveRecipe}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg transition-colors"
-            >
-              💾 Guardar Receta
-            </button>
+
+            <div className="flex gap-2">
+              <button
+                onClick={saveRecipe}
+                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg transition-colors"
+              >
+                {editandoReceta ? '💾 Actualizar Receta' : '💾 Guardar Receta'}
+              </button>
+              {editandoReceta && (
+                <button
+                  onClick={limpiarFormularioReceta}
+                  className="px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="bg-slate-800/30 border border-slate-700 p-6 rounded-2xl">
@@ -157,7 +226,7 @@ export default function RecetasPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {recetas.map((receta) => (
-                  <RecetaCard key={receta.id} receta={receta} />
+                  <RecetaCard key={receta.id} receta={receta} onEditar={cargarRecetaEnFormulario} />
                 ))}
               </div>
             )}
