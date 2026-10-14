@@ -69,13 +69,12 @@ async def update_recipe(
     return await _obtener_response(db, tenant_id, recipe_id)
 
 
-def calculate_cost(receta: Recipe) -> Decimal:
-    """Costo = suma de (cantidad en usage_unit x costo por unidad del ingrediente).
-    Dinámico: si el precio de un ingrediente cambia, esto refleja el nuevo costo."""
-    return sum(
-        (item.quantity * item.ingredient.cost_per_unit for item in receta.items),
-        Decimal("0"),
-    )
+def _a_response(receta: Recipe) -> RecipeOut:
+    response = RecipeOut.model_validate(receta)
+    costo = calculate_cost(receta)
+    response.cost = round(float(costo), 2)
+    response.margin = round(float((receta.price - costo) / receta.price * 100), 1)
+    return response
 
 
 async def _obtener_response(
