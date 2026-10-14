@@ -3,6 +3,7 @@ import { useListaFiltrada } from '@/hooks/useListaFiltrada';
 import { SeccionColapsable } from '@/components/ux/SeccionColapsable';
 import { Buscador } from '@/components/ux/Buscador';
 import { Paginador } from '@/components/ux/Paginador';
+import { formatoCOP, formatoCOPDecimales } from '@/lib/formato';
 
 const textoDe = (ing: Ingrediente) => `${ing.name} ${ing.usage_unit}`;
 
@@ -33,12 +34,12 @@ export const IngredienteList = ({ ingredientes, onEditar, onComprar, onEliminar 
                 <div>
                   <p className="capitalize">{ing.name}</p>
                   <p className="text-xs text-slate-500">
-                    ${ing.cost_per_unit.toLocaleString()}/{ing.usage_unit} · Stock: {ing.stock}{ing.usage_unit}
+                    ${formatoCOPDecimales(ing.cost_per_unit)}/{ing.usage_unit} · Stock: {ing.stock}{ing.usage_unit}
                     {alerta && <span className="text-rose-400 font-bold"> ⚠️ Bajo</span>}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-amber-400 font-medium">${ing.purchase_price.toLocaleString()}</span>
+                  <span className="text-amber-400 font-medium">{formatoCOP(ing.purchase_price)}</span>
                   <button onClick={() => onComprar(ing)} title="Registrar compra"
                     className="text-slate-600 hover:text-emerald-400 transition-colors">📥</button>
                   <button onClick={() => onEditar(ing)} title="Editar"
