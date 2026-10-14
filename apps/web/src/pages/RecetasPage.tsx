@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useIngredientes } from '@/hooks/useIngredientes';
 import { useRecetas } from '@/hooks/useRecetas';
-import { IngredienteForm } from '@/components/recetas/ingredienteForm';
+import { IngredienteForm } from '@/components/recetas/IngredienteForm';
 import { IngredienteList } from '@/components/recetas/IngredienteList';
 import { CompraModal } from '@/components/recetas/CompraModal';
-import { RecetaCard } from '@/components/recetas/RecetaCard';
+import { RecetaList } from '@/components/recetas/RecetasList';
 import type { Ingrediente, Receta } from '@/types/inventario';
 
 type ItemTemporal = {
@@ -52,6 +52,10 @@ export default function RecetasPage() {
     ]);
     setSelectedIng('');
     setRecipeQty('');
+  };
+
+  const quitarItem = (index: number) => {
+    setCurrentItems(currentItems.filter((_, i) => i !== index));
   };
 
   const cargarRecetaEnFormulario = (receta: Receta) => {
@@ -179,9 +183,13 @@ export default function RecetasPage() {
               ) : (
                 <ul className="space-y-2">
                   {currentItems.map((item, i) => (
-                    <li key={i} className="flex justify-between text-slate-300 text-sm">
+                    <li key={i} className="flex justify-between text-slate-300 text-sm group">
                       <span>{item.quantity} {item.unit} de {item.name}</span>
-                      <span className="text-amber-400">${item.costo.toLocaleString()}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-amber-400">${item.costo.toLocaleString()}</span>
+                        <button onClick={() => quitarItem(i)} title="Quitar"
+                          className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all">✕</button>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -219,18 +227,7 @@ export default function RecetasPage() {
             </div>
           </div>
 
-          <div className="bg-slate-800/30 border border-slate-700 p-6 rounded-2xl">
-            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Menú del Restaurante</h3>
-            {recetas.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-4">Aún no has creado recetas.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {recetas.map((receta) => (
-                  <RecetaCard key={receta.id} receta={receta} onEditar={cargarRecetaEnFormulario} />
-                ))}
-              </div>
-            )}
-          </div>
+          <RecetaList recetas={recetas} onEditar={cargarRecetaEnFormulario} />
         </div>
       </div>
     </div>
