@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Ingrediente } from '@/types/inventario';
+import { formatoCOP } from '@/lib/formato';
 
 interface Props {
   ingrediente: Ingrediente;
@@ -49,7 +50,7 @@ export const CompraModal = ({ ingrediente, onClose, onConfirm }: Props) => {
           type="number" min={0}
           value={precio}
           onChange={(e) => setPrecio(e.target.value)}
-          placeholder={`Actual: $${ingrediente.purchase_price.toLocaleString()}`}
+          placeholder={`Actual: ${formatoCOP(ingrediente.purchase_price)}`}
           className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-2 outline-none focus:ring-2 focus:ring-amber-500"
         />
         <p className="text-xs text-slate-500 mb-4">
