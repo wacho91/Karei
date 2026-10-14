@@ -4,6 +4,7 @@ import {
   type UnidadCompra,
 } from '../../constants/unidades';
 import type { Ingrediente, IngredienteInput } from '@/types/inventario';
+import { formatoCOPDecimales } from '@/lib/formato';
 
 const nuevoForm = (compra: UnidadCompra = 'KG'): IngredienteInput => ({
   name: '',
@@ -143,7 +144,7 @@ export const IngredienteForm = ({ onCreate, onUpdate, editando, onCancelarEdicio
               : `Cada ${usoNombre.replace(/s$/, '')} te cuesta`}
           </span>
           <span className="text-emerald-400 font-bold text-sm">
-            ${costoPorUso.toLocaleString(undefined, { maximumFractionDigits: 2 })} / {form.usage_unit}
+            ${formatoCOPDecimales(costoPorUso)} / {form.usage_unit}
           </span>
         </div>
       )}
