@@ -7,13 +7,14 @@ import { CompraModal } from '@/components/recetas/CompraModal';
 import { RecetaList } from '@/components/recetas/RecetasList';
 import type { Ingrediente, Receta } from '@/types/inventario';
 import { nombreUso } from '@/constants/unidades';
-import { formatoCOP } from '@/lib/formato';
+import { formatoCOP, formatoCOPDecimales } from '@/lib/formato'; // ← NUEVO: agregamos formatoCOPDecimales
 
 type ItemTemporal = {
   ingredient_id: string;
   name: string;
   quantity: number;
   unit: string;
+  unit_rate: number; // ← NUEVO: costo por unidad del ingrediente (para auditoría visual)
   costo: number;
 };
 
@@ -49,6 +50,7 @@ export default function RecetasPage() {
         name: seleccionado.name,
         quantity: Number(recipeQty),
         unit: seleccionado.usage_unit,
+        unit_rate: seleccionado.cost_per_unit, // ← NUEVO
         costo: Number(recipeQty) * seleccionado.cost_per_unit,
       },
     ]);
@@ -72,6 +74,7 @@ export default function RecetasPage() {
           name: ing?.name ?? 'Ingrediente eliminado',
           quantity: item.quantity,
           unit: ing?.usage_unit ?? '',
+          unit_rate: ing?.cost_per_unit ?? 0, // ← NUEVO
           costo: item.quantity * (ing?.cost_per_unit ?? 0),
         };
       }),
@@ -160,7 +163,7 @@ export default function RecetasPage() {
                 <option value="">Seleccionar ingrediente...</option>
                 {ingredientes.map((ing) => (
                   <option key={ing.id} value={ing.id}>
-                    {ing.name} (${ing.cost_per_unit}/{ing.usage_unit})
+                    {ing.name} ({formatoCOPDecimales(ing.cost_per_unit)}/{ing.usage_unit}) {/* ← NUEVO: tasa legible */}
                   </option>
                 ))}
               </select>
@@ -186,7 +189,12 @@ export default function RecetasPage() {
                 <ul className="space-y-2">
                   {currentItems.map((item, i) => (
                     <li key={i} className="flex justify-between text-slate-300 text-sm group">
-                      <span>{item.quantity} {item.unit} de {item.name}</span>
+                      <span>
+                        {item.quantity} {item.unit} de {item.name}{' '}
+                        <span className="text-slate-500">
+                          ({formatoCOPDecimales(item.unit_rate)}/{item.unit}) {/* ← NUEVO: la tasa visible */}
+                        </span>
+                      </span>
                       <span className="flex items-center gap-2">
                         <span className="text-amber-400">{formatoCOP(item.costo)}</span>
                         <button onClick={() => quitarItem(i)} title="Quitar"
