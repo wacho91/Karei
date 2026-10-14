@@ -6,6 +6,7 @@ import { IngredienteList } from '@/components/recetas/IngredienteList';
 import { CompraModal } from '@/components/recetas/CompraModal';
 import { RecetaList } from '@/components/recetas/RecetasList';
 import type { Ingrediente, Receta } from '@/types/inventario';
+import { nombreUso } from '@/constants/unidades';
 
 type ItemTemporal = {
   ingredient_id: string;
@@ -166,7 +167,7 @@ export default function RecetasPage() {
                 type="number" min={0} step="any"
                 value={recipeQty}
                 onChange={(e) => setRecipeQty(e.target.value)}
-                placeholder={seleccionado ? `Cant. (${seleccionado.usage_unit})` : 'Cant.'}
+                placeholder={seleccionado ? `Cant. en ${nombreUso(seleccionado.usage_unit)}` : 'Cant.'}
                 className="w-1/3 bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
               />
               <button
