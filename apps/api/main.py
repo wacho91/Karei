@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
 from app.deps import auth
-from app.routers import inventory_router  # ← NUEVO
+from app.routers import inventory_router, pos_router  # ← NUEVO
 
 
 @asynccontextmanager
