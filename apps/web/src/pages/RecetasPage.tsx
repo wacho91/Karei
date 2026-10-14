@@ -7,6 +7,7 @@ import { CompraModal } from '@/components/recetas/CompraModal';
 import { RecetaList } from '@/components/recetas/RecetasList';
 import type { Ingrediente, Receta } from '@/types/inventario';
 import { nombreUso } from '@/constants/unidades';
+import { formatoCOP } from '@/lib/formato';
 
 type ItemTemporal = {
   ingredient_id: string;
@@ -187,7 +188,7 @@ export default function RecetasPage() {
                     <li key={i} className="flex justify-between text-slate-300 text-sm group">
                       <span>{item.quantity} {item.unit} de {item.name}</span>
                       <span className="flex items-center gap-2">
-                        <span className="text-amber-400">${item.costo.toLocaleString()}</span>
+                        <span className="text-amber-400">{formatoCOP(item.costo)}</span>
                         <button onClick={() => quitarItem(i)} title="Quitar"
                           className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all">✕</button>
                       </span>
@@ -197,7 +198,7 @@ export default function RecetasPage() {
               )}
               {currentItems.length > 0 && (
                 <p className="text-right text-xs text-slate-400 mt-3 border-t border-slate-700 pt-2">
-                  Costo total: <span className="text-white font-bold">${costoActual.toLocaleString()}</span>
+                  Costo total: <span className="text-white font-bold">{formatoCOP(costoActual)}</span>
                 </p>
               )}
             </div>
