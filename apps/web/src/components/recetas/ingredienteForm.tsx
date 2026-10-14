@@ -112,12 +112,15 @@ export const IngredienteForm = ({ onCreate, onUpdate, editando, onCancelarEdicio
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs text-slate-400">
-            {esPaquete ? '¿Cuántas unidades trae?' : `Contenido (en ${usoNombre})`}
+            {esPaquete
+              ? '¿Cuántas unidades trae UN paquete?'
+              : `¿Cuánto trae UNA compra? (en ${usoNombre})`}
           </label>
           <input
             type="number" min={0.01} step="any"
             value={form.content_qty || ''}
             onChange={(e) => setForm({ ...form, content_qty: Number(e.target.value) })}
+            placeholder={esPaquete ? 'Ej: 8 panes' : `Ej: 1000`}
             className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
           />
         </div>
@@ -173,8 +176,9 @@ export const IngredienteForm = ({ onCreate, onUpdate, editando, onCancelarEdicio
       </div>
 
       <p className="text-xs text-slate-500 mb-4">
-        💡 Compras en la unidad del mercado, pero tus recetas y tu stock miden en{' '}
-        <span className="text-slate-300">{usoNombre}</span>. Así el descuento de cocina es exacto.
+        💡 Ej: compras 1 paquete de pan a $5.000 que trae 5 panes → contenido: 5 →
+        cada pan cuesta $1.000. Tu <span className="text-slate-300">stock total</span> se
+        registra aparte, abajo.
       </p>
 
       <div className="flex gap-2">
