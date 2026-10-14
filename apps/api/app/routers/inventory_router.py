@@ -1,4 +1,4 @@
-"""Router de inventario: ingredientes y recetas (sin lógica de negocio)."""
+"""Router de inventario: ingredientes, compras y recetas (sin lógica de negocio)."""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
@@ -6,10 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.schemas.inventory import (
-    IngredientCreate,
-    IngredientOut,
-    RecipeCreate,
-    RecipeOut,
+    IngredientCreate, IngredientOut, PurchaseCreate, RecipeCreate, RecipeOut,
 )
 from app.services import ingredient_service, recipe_service
 
@@ -48,6 +45,17 @@ async def actualizar_ingrediente(
     return await ingredient_service.update_ingredient(db, tenant_id, ingredient_id, datos)
 
 
+@router.post("/ingredients/{ingredient_id}/purchases", response_model=IngredientOut)
+async def registrar_compra(
+    ingredient_id: UUID,
+    datos: PurchaseCreate,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+):
+    """Llega mercancía: suma stock y amortigua el precio si el mercado cambió."""
+    return await ingredient_service.register_purchase(db, tenant_id, ingredient_id, datos)
+
+
 @router.delete("/ingredients/{ingredient_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def eliminar_ingrediente(
     ingredient_id: UUID,
@@ -72,3 +80,13 @@ async def crear_receta(
     tenant_id: UUID = Depends(get_tenant_id),
 ):
     return await recipe_service.create_recipe(db, tenant_id, datos)
+
+
+@router.put("/recipes/{recipe_id}", response_model=RecipeOut)
+async def actualizar_receta(
+    recipe_id: UUID,
+    datos: RecipeCreate,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+):
+    return await recipe_service.update_recipe(db, tenant_id, recipe_id, datos)

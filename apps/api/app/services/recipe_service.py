@@ -1,4 +1,4 @@
-"""Servicio de recetas: creación y motor de Food Cost dinámico."""
+"""Servicio de recetas: creación, edición y motor de Food Cost dinámico."""
 from decimal import Decimal
 from uuid import UUID
 
@@ -22,13 +22,13 @@ async def list_recipes(db: AsyncSession, tenant_id: UUID) -> list[RecipeOut]:
         .options(_LOADER)
         .order_by(Recipe.name)
     )
-    return [_a_response(recipe) for recipe in result.scalars()]
+    return [_a_response(receta) for receta in result.scalars()]
 
 
 async def create_recipe(
     db: AsyncSession, tenant_id: UUID, datos: RecipeCreate
 ) -> RecipeOut:
-    ingredientes = await _validar_ingredientes(db, tenant_id, datos)
+    await _validar_ingredientes(db, tenant_id, datos)
     receta = Recipe(
         tenant_id=tenant_id,
         name=datos.name,
@@ -36,19 +36,42 @@ async def create_recipe(
         price=Decimal(str(datos.price)),
     )
     receta.items = [
-        RecipeItem(
-            ingredient_id=item.ingredient_id,
-            quantity=Decimal(str(item.quantity)),
-        )
-        for item in datos.items
+        RecipeItem(ingredient_id=i.ingredient_id, quantity=Decimal(str(i.quantity)))
+        for i in datos.items
     ]
     db.add(receta)
     await db.commit()
     return await _obtener_response(db, tenant_id, receta.id)
 
 
+async def update_recipe(
+    db: AsyncSession, tenant_id: UUID, recipe_id: UUID, datos: RecipeCreate
+) -> RecipeOut:
+    result = await db.execute(
+        select(Recipe)
+        .where(Recipe.id == recipe_id, Recipe.tenant_id == tenant_id)
+        .options(_LOADER)
+    )
+    receta = result.scalar_one_or_none()
+    if not receta:
+        raise HTTPException(404, "Receta no encontrada")
+
+    await _validar_ingredientes(db, tenant_id, datos)
+    receta.name = datos.name
+    receta.description = datos.description
+    receta.price = Decimal(str(datos.price))
+    receta.items.clear()
+    for item in datos.items:
+        receta.items.append(
+            RecipeItem(ingredient_id=item.ingredient_id, quantity=Decimal(str(item.quantity)))
+        )
+    await db.commit()
+    return await _obtener_response(db, tenant_id, recipe_id)
+
+
 def calculate_cost(receta: Recipe) -> Decimal:
-    """Costo = suma de (cantidad en usage_unit x costo por unidad del ingrediente)."""
+    """Costo = suma de (cantidad en usage_unit x costo por unidad del ingrediente).
+    Dinámico: si el precio de un ingrediente cambia, esto refleja el nuevo costo."""
     return sum(
         (item.quantity * item.ingredient.cost_per_unit for item in receta.items),
         Decimal("0"),
@@ -71,17 +94,15 @@ async def _obtener_response(
 
 async def _validar_ingredientes(
     db: AsyncSession, tenant_id: UUID, datos: RecipeCreate
-) -> dict[UUID, Ingredient]:
+) -> None:
     ids = {item.ingredient_id for item in datos.items}
     result = await db.execute(
         select(Ingredient).where(
             Ingredient.tenant_id == tenant_id, Ingredient.id.in_(ids)
         )
     )
-    encontrados = {ing.id: ing for ing in result.scalars()}
-    if len(encontrados) != len(ids):
+    if len({ing.id for ing in result.scalars()}) != len(ids):
         raise HTTPException(400, "Uno o más ingredientes no existen en tu inventario")
-    return encontrados
 
 
 def _a_response(receta: Recipe) -> RecipeOut:

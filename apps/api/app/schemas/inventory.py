@@ -1,10 +1,23 @@
 """Schemas Pydantic del módulo de inventario."""
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, field_validator, model_validator,
+)
 
 UNIDADES_COMPRA = {"KG", "G", "L", "ML", "UND", "PAQUETE"}
 UNIDADES_USO = {"G", "ML", "UND"}
+
+# Regla de oro de unidades: masa se usa en G, volumen en ML, conteo en UND.
+# Esto hace imposible comprar KG y usar en UND (el error clásico de bodega).
+USO_PERMITIDO = {
+    "KG": "G",
+    "G": "G",
+    "L": "ML",
+    "ML": "ML",
+    "UND": "UND",
+    "PAQUETE": "UND",
+}
 
 
 class IngredientCreate(BaseModel):
@@ -32,6 +45,15 @@ class IngredientCreate(BaseModel):
             raise ValueError(f"Unidad inválida. Usa: {sorted(UNIDADES_USO)}")
         return v
 
+    @model_validator(mode="after")
+    def validar_compatibilidad(self) -> "IngredientCreate":
+        esperado = USO_PERMITIDO[self.purchase_unit]
+        if self.usage_unit != esperado:
+            raise ValueError(
+                f"Compra en {self.purchase_unit} solo se usa en {esperado} (recibido: {self.usage_unit})"
+            )
+        return self
+
 
 class IngredientOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -45,6 +67,14 @@ class IngredientOut(BaseModel):
     cost_per_unit: float
     stock: float
     min_stock: float
+
+
+class PurchaseCreate(BaseModel):
+    """Compra de mercancía: suma stock y amortigua el precio si el mercado cambió."""
+    quantity: float = Field(gt=0, description="Cantidad comprada (en usage_unit)")
+    purchase_price: float | None = Field(
+        default=None, gt=0, description="Nuevo precio de compra si cambió en el mercado"
+    )
 
 
 class RecipeItemIn(BaseModel):

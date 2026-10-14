@@ -1,4 +1,4 @@
-"""Servicio de ingredientes: CRUD y cálculo de costo por unidad de uso."""
+"""Servicio de ingredientes: CRUD, compras y costo por unidad de uso."""
 from decimal import Decimal
 from uuid import UUID
 
@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inventory import Ingredient, RecipeItem
-from app.schemas.inventory import IngredientCreate
+from app.schemas.inventory import IngredientCreate, PurchaseCreate
 
 
 def _costo_por_unidad(precio: float, contenido: float) -> Decimal:
@@ -47,6 +47,7 @@ async def update_ingredient(
     db: AsyncSession, tenant_id: UUID, ingredient_id: UUID, datos: IngredientCreate
 ) -> Ingredient:
     ingrediente = await _obtener(db, tenant_id, ingredient_id)
+    await _proteger_unidades(db, ingrediente, datos)
     ingrediente.name = datos.name
     ingrediente.purchase_unit = datos.purchase_unit
     ingrediente.purchase_price = Decimal(str(datos.purchase_price))
@@ -57,7 +58,24 @@ async def update_ingredient(
     ingrediente.cost_per_unit = _costo_por_unidad(datos.purchase_price, datos.content_qty)
     await db.commit()
     await db.refresh(ingrediente)
-    return ingrediente  # Las recetas afectadas recalculan su costo al consultarse
+    return ingrediente
+
+
+async def register_purchase(
+    db: AsyncSession, tenant_id: UUID, ingredient_id: UUID, datos: PurchaseCreate
+) -> Ingredient:
+    """Llega mercancía: suma stock. Si el precio del mercado cambió, amortigua
+    el costo por unidad y TODAS las recetas se recalculan al consultarse."""
+    ingrediente = await _obtener(db, tenant_id, ingredient_id)
+    ingrediente.stock += Decimal(str(datos.quantity))
+    if datos.purchase_price is not None:
+        ingrediente.purchase_price = Decimal(str(datos.purchase_price))
+        ingrediente.cost_per_unit = _costo_por_unidad(
+            datos.purchase_price, float(ingrediente.content_qty)
+        )
+    await db.commit()
+    await db.refresh(ingrediente)
+    return ingrediente
 
 
 async def delete_ingredient(db: AsyncSession, tenant_id: UUID, ingredient_id: UUID) -> None:
@@ -81,6 +99,24 @@ async def _obtener(db: AsyncSession, tenant_id: UUID, ingredient_id: UUID) -> In
     if not ingrediente:
         raise HTTPException(404, "Ingrediente no encontrado")
     return ingrediente
+
+
+async def _proteger_unidades(
+    db: AsyncSession, ingrediente: Ingredient, datos: IngredientCreate
+) -> None:
+    """Si el ingrediente ya vive en recetas, su unidad de uso es intocable:
+    cambiarla corrompería las cantidades guardadas (ej: 250 pensados en G)."""
+    if datos.usage_unit == ingrediente.usage_unit:
+        return
+    en_uso = await db.execute(
+        select(RecipeItem).where(RecipeItem.ingredient_id == ingrediente.id).limit(1)
+    )
+    if en_uso.scalar_one_or_none():
+        raise HTTPException(
+            409,
+            f"Hay recetas usando este ingrediente en {ingrediente.usage_unit}. "
+            "No puedes cambiar su unidad de uso.",
+        )
 
 
 async def _validar_nombre_unico(db: AsyncSession, tenant_id: UUID, name: str) -> None:
