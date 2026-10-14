@@ -51,6 +51,7 @@ class OrderStatus(str, Enum):
     IN_PREPARATION = "IN_PREPARATION"
     READY = "READY"
     SERVED = "SERVED"
+    PAID = "PAID"
     CANCELLED = "CANCELLED"
 
 
