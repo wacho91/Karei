@@ -102,11 +102,30 @@ async def list_tables(db: AsyncSession, tenant_id: UUID) -> list[dict]:
 async def create_table(
     db: AsyncSession, tenant_id: UUID, branch_id: UUID, datos
 ) -> dict:
-    duplicada = (await db.execute(
+    """Crea una mesa. Si existe una DESACTIVADA con el mismo código,
+    se reactiva con los datos nuevos (reciclaje: el historial se conserva)."""
+    activa = (await db.execute(
+        select(Table).where(
+            Table.tenant_id == tenant_id, Table.code == datos.code,
+            Table.is_active == True,
+        )
+    )).scalar_one_or_none()
+    if activa:
+        raise HTTPException(400, f"Ya existe una mesa activa con el código {datos.code}")
+
+    dormida = (await db.execute(
         select(Table).where(Table.tenant_id == tenant_id, Table.code == datos.code)
     )).scalar_one_or_none()
-    if duplicada:
-        raise HTTPException(400, f"Ya existe una mesa con el código {datos.code}")
+    if dormida:
+        dormida.name = datos.name
+        dormida.capacity = datos.capacity
+        dormida.zone = datos.zone
+        dormida.is_active = True
+        dormida.status = TableStatus.AVAILABLE
+        await db.commit()
+        await db.refresh(dormida)
+        return _mesa_dict(dormida)
+
     mesa = Table(
         tenant_id=tenant_id, branch_id=branch_id, code=datos.code,
         name=datos.name, capacity=datos.capacity, zone=datos.zone,

@@ -42,12 +42,12 @@ async def editar_mesa(
     return await table_service.update_table(db, ctx[0], table_id, datos)
 
 
-@router.delete("/tables/{table_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/tables/{table_id}")
 async def eliminar_mesa(
     table_id: UUID, ctx: tuple = Depends(get_tenant_branch),
     db: AsyncSession = Depends(get_db),
 ):
-    await table_service.delete_table(db, ctx[0], table_id)
+    return await table_service.delete_table(db, ctx[0], table_id)
 
 
 @router.post("/tables/{table_id}/open", response_model=TableOut)
