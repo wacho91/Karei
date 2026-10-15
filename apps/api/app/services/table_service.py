@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.enums import (
     TableSessionStatus, TableStatus, TenantPlan, TenantStatus, UserStatus,
@@ -72,7 +73,7 @@ async def list_tables(db: AsyncSession, tenant_id: UUID) -> list[dict]:
     mesas = (await db.execute(
         select(Table).where(
             Table.tenant_id == tenant_id,
-            Table.is_active == True,  # ← FIX: las desactivadas no aparecen en el mapa
+            Table.is_active == True,
         ).order_by(Table.code)
     )).scalars().all()
 
@@ -84,10 +85,11 @@ async def list_tables(db: AsyncSession, tenant_id: UUID) -> list[dict]:
     )).scalars().all()
     sesion_por_mesa = {s.table_id: s for s in sesiones}
 
+    # FIX MissingGreenlet: los items deben venir precargados (async prohíbe lazy load)
     orders = (await db.execute(
         select(Order).where(
-            Order.tenant_id == tenant_id, Order.status.notin_(["PAID", "CANCELLED"])
-        )
+            Order.tenant_id == tenant_id, Order.status.notin_(["PAID", "CANCELLED"]),
+        ).options(selectinload(Order.items))
     )).scalars().all()
     order_por_sesion = {o.session_id: o for o in orders if o.session_id}
 
