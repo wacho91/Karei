@@ -138,3 +138,27 @@ export function useCobrar() {
     onSuccess: invalidar,
   });
 }
+
+export function useComandasCocina() {
+  return useQuery({
+    queryKey: ['pos', 'kitchen'],
+    queryFn: async () => {
+      const { data } = await api.get<ComandaCocina[]>('/pos/kitchen/orders');
+      return data;
+    },
+    refetchInterval: 10_000, // la cocina se actualiza sola
+  });
+}
+
+export function useAvanzarComanda() {
+  const invalidar = useInvalidarPOS();
+  return useMutation({
+    mutationFn: async (orderId: string) => {
+      const { data } = await api.post<{ order_number: string; status: string }>(
+        `/pos/orders/${orderId}/advance`,
+      );
+      return data;
+    },
+    onSuccess: invalidar,
+  });
+}
