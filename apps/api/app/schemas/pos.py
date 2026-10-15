@@ -2,6 +2,7 @@
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 
 class TableCreate(BaseModel):
@@ -79,3 +80,18 @@ class CheckoutOut(BaseModel):
     tip: float
     total: float
     method: str
+
+class KdsItemOut(BaseModel):
+    id: UUID
+    recipe_name: str = ""
+    quantity: float
+    notes: str | None = None
+
+
+class KdsOrderOut(BaseModel):
+    id: UUID
+    order_number: str
+    status: str
+    table_name: str = ""
+    created_at: datetime | None = None
+    items: list[KdsItemOut] = []
