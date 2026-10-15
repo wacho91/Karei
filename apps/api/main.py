@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
 from app.deps import auth
-from app.routers import inventory_router, pos_router  # ← NUEVO
+from app.routers import inventory_router, pos_router, dashboard_router  # ← NUEVO
 
 
 @asynccontextmanager
@@ -41,7 +41,7 @@ app.add_middleware(
 
 app.include_router(pos_router.router, prefix="/api/v1")
 app.include_router(inventory_router.router, prefix="/api/v1")  # ← NUEVO
-
+app.include_router(dashboard_router.router, prefix="/api/v1")  # ← NUEVO
 
 @app.get("/health", tags=["system"])
 async def health() -> dict[str, str]:
