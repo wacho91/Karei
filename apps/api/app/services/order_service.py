@@ -73,7 +73,7 @@ async def quitar_item(db: AsyncSession, tenant_id: UUID, table_id: UUID, item_id
     item = next((i for i in order.items if i.id == item_id), None)
     if not item:
         raise HTTPException(404, "Item no encontrado en el pedido")
-    await db.delete(item)
+    order.items.remove(item)  # sale de la cuenta YA (delete-orphan lo borra al commit)
     _recalcular(order)
     await db.commit()
     return await order_a_out(db, order)
@@ -133,12 +133,14 @@ async def checkout(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) -> 
     )).scalar_one()
     mesa.status = TableStatus.AVAILABLE
 
-    await db.commit()
-    return {
+    # Capturamos la respuesta ANTES del commit (defensa: los datos ya están en memoria)
+    resultado = {
         "order_number": order.order_number,
         "subtotal": float(order.subtotal), "tip": float(order.tip),
         "total": float(order.total), "method": datos.method,
     }
+    await db.commit()
+    return resultado
 
 
 async def order_a_out(db: AsyncSession, order: Order) -> dict:
