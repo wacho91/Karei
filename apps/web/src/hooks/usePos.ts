@@ -60,7 +60,7 @@ export function useCrearMesa() {
 export function useActualizarMesa() {
   const invalidar = useInvalidarPOS();
   return useMutation({
-    mutationFn: async (p: { mesaId: string; datos: Omit<MesaInput, 'code'> }) => {
+    mutationFn: async (p: { mesaId: string; datos: Partial<MesaInput> }) => {
       const { data } = await api.put<Mesa>(`/pos/tables/${p.mesaId}`, p.datos);
       return data;
     },
