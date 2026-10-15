@@ -70,7 +70,10 @@ async def sesion_abierta(db: AsyncSession, table_id: UUID) -> TableSession | Non
 
 async def list_tables(db: AsyncSession, tenant_id: UUID) -> list[dict]:
     mesas = (await db.execute(
-        select(Table).where(Table.tenant_id == tenant_id).order_by(Table.code)
+        select(Table).where(
+            Table.tenant_id == tenant_id,
+            Table.is_active == True,  # ← FIX: las desactivadas no aparecen en el mapa
+        ).order_by(Table.code)
     )).scalars().all()
 
     sesiones = (await db.execute(
@@ -128,12 +131,31 @@ async def update_table(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos)
     return _mesa_dict(mesa)
 
 
-async def delete_table(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> None:
+async def delete_table(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dict:
+    """Elimina una mesa. REGLA DE ERP: si tiene historial (sesiones o pedidos),
+    nunca se borra — se desactiva (soft delete) para preservar las ventas."""
     mesa = await _obtener_mesa(db, tenant_id, table_id)
     if await sesion_abierta(db, table_id):
         raise HTTPException(409, "La mesa tiene una cuenta abierta. Cóbrela primero.")
+
+    tiene_sesiones = (await db.execute(
+        select(TableSession.id).where(TableSession.table_id == table_id).limit(1)
+    )).scalar_one_or_none()
+    tiene_pedidos = (await db.execute(
+        select(Order.id).where(Order.table_id == table_id).limit(1)
+    )).scalar_one_or_none()
+
+    if tiene_sesiones or tiene_pedidos:
+        mesa.is_active = False
+        await db.commit()
+        return {
+            "mensaje": "La mesa tiene historial de ventas: fue DESACTIVADA (no aparece en el mapa). El historial se conserva.",
+            "desactivada": True,
+        }
+
     await db.delete(mesa)
     await db.commit()
+    return {"mensaje": "Mesa eliminada", "desactivada": False}
 
 
 async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dict:
