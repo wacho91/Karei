@@ -139,6 +139,17 @@ async def create_table(
 
 async def update_table(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) -> dict:
     mesa = await _obtener_mesa(db, tenant_id, table_id)
+    if datos.code and datos.code != mesa.code:
+        duplicada = (await db.execute(
+            select(Table).where(
+                Table.tenant_id == tenant_id,
+                Table.code == datos.code,
+                Table.id != mesa.id,
+            )
+        )).scalar_one_or_none()
+        if duplicada:
+            raise HTTPException(400, f"El código {datos.code} ya lo usa otra mesa")
+        mesa.code = datos.code
     if datos.name is not None:
         mesa.name = datos.name
     if datos.capacity is not None:
