@@ -12,6 +12,7 @@ class TableCreate(BaseModel):
 
 
 class TableUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=32)
     name: str | None = Field(default=None, min_length=1, max_length=120)
     capacity: int | None = Field(default=None, ge=1, le=50)
     zone: str | None = None
