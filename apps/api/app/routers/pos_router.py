@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.schemas.pos import (
     CheckoutIn, CheckoutOut, ItemsIn, OrderOut, SendOut,
-    TableCreate, TableOut, TableUpdate,
+    TableCreate, TableOut, TableUpdate, KdsOrderOut
 )
 from app.services import order_service, table_service
 
@@ -98,3 +98,19 @@ async def cobrar_mesa(
     ctx: tuple = Depends(get_tenant_branch), db: AsyncSession = Depends(get_db),
 ):
     return await order_service.checkout(db, ctx[0], table_id, datos)
+
+@router.get("/kitchen/orders", response_model=list[KdsOrderOut])
+async def comandas_cocina(
+    ctx: tuple = Depends(get_tenant_branch), db: AsyncSession = Depends(get_db),
+):
+    """Comandas activas para la pantalla del cocinero."""
+    return await order_service.listar_cocina(db, ctx[0])
+
+
+@router.post("/orders/{order_id}/advance")
+async def avanzar_comanda(
+    order_id: UUID, ctx: tuple = Depends(get_tenant_branch),
+    db: AsyncSession = Depends(get_db),
+):
+    """El cocinero avanza el estado de la comanda."""
+    return await order_service.avanzar_cocina(db, ctx[0], order_id)
