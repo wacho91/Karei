@@ -11,7 +11,7 @@ export function useMesas() {
       const { data } = await api.get<Mesa[]>('/pos/tables');
       return data;
     },
-    refetchInterval: 15_000, // el mapa se actualiza solo cada 15s
+    refetchInterval: 15_000,
   });
 }
 
@@ -42,7 +42,7 @@ function useInvalidarPOS() {
   const qc = useQueryClient();
   return () => {
     qc.invalidateQueries({ queryKey: ['pos'] });
-    qc.invalidateQueries({ queryKey: ['inventory'] }); // el descuento de stock se ve al instante
+    qc.invalidateQueries({ queryKey: ['inventory'] });
   };
 }
 
@@ -51,6 +51,28 @@ export function useCrearMesa() {
   return useMutation({
     mutationFn: async (datos: MesaInput) => {
       const { data } = await api.post<Mesa>('/pos/tables', datos);
+      return data;
+    },
+    onSuccess: invalidar,
+  });
+}
+
+export function useActualizarMesa() {
+  const invalidar = useInvalidarPOS();
+  return useMutation({
+    mutationFn: async (p: { mesaId: string; datos: Omit<MesaInput, 'code'> }) => {
+      const { data } = await api.put<Mesa>(`/pos/tables/${p.mesaId}`, p.datos);
+      return data;
+    },
+    onSuccess: invalidar,
+  });
+}
+
+export function useDesactivarMesa() {
+  const invalidar = useInvalidarPOS();
+  return useMutation({
+    mutationFn: async (mesaId: string) => {
+      const { data } = await api.delete<{ mensaje: string }>(`/pos/tables/${mesaId}`);
       return data;
     },
     onSuccess: invalidar,
