@@ -189,3 +189,65 @@ async def _activo_obligatorio(db: AsyncSession, tenant_id: UUID, table_id: UUID)
     if not order:
         raise HTTPException(404, "La mesa no tiene un pedido activo")
     return order
+
+_KDS_ESTADOS = ("SENT_TO_KITCHEN", "IN_PREPARATION", "READY")
+_KDS_SIGUIENTE = {
+    "SENT_TO_KITCHEN": "IN_PREPARATION",
+    "IN_PREPARATION": "READY",
+}
+
+
+async def listar_cocina(db: AsyncSession, tenant_id: UUID) -> list[dict]:
+    """Comandas activas para la pantalla del cocinero (KDS), la más antigua primero."""
+    orders = (await db.execute(
+        select(Order).where(
+            Order.tenant_id == tenant_id,
+            Order.status.in_(_KDS_ESTADOS),
+        ).options(_LOADER).order_by(Order.created_at)
+    )).scalars().all()
+
+    ids_mesas = {o.table_id for o in orders}
+    nombres_mesa = {}
+    if ids_mesas:
+        filas = (await db.execute(
+            select(Table.id, Table.name).where(Table.id.in_(ids_mesas))
+        )).all()
+        nombres_mesa = {f.id: f.name for f in filas}
+
+    ids_recetas = {i.recipe_id for o in orders for i in o.items}
+    nombres_receta = {}
+    if ids_recetas:
+        filas = (await db.execute(
+            select(Recipe.id, Recipe.name).where(Recipe.id.in_(ids_recetas))
+        )).all()
+        nombres_receta = {f.id: f.name for f in filas}
+
+    return [{
+        "id": o.id,
+        "order_number": o.order_number,
+        "status": o.status,
+        "table_name": nombres_mesa.get(o.table_id, "Mesa"),
+        "created_at": o.created_at.isoformat() if o.created_at else None,
+        "items": [{
+            "id": i.id,
+            "recipe_name": nombres_receta.get(i.recipe_id, ""),
+            "quantity": float(i.quantity),
+            "notes": i.notes,
+        } for i in o.items],
+    } for o in orders]
+
+
+async def avanzar_cocina(db: AsyncSession, tenant_id: UUID, order_id: UUID) -> dict:
+    """El cocinero avanza la comanda: Pendiente -> En preparación -> Lista."""
+    result = await db.execute(
+        select(Order).where(Order.id == order_id, Order.tenant_id == tenant_id)
+    )
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Pedido no encontrado")
+    siguiente = _KDS_SIGUIENTE.get(order.status)
+    if not siguiente:
+        raise HTTPException(409, "La comanda no está pendiente en cocina")
+    order.status = siguiente
+    await db.commit()
+    return {"order_number": order.order_number, "status": siguiente}
