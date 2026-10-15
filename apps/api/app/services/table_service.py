@@ -137,17 +137,20 @@ async def delete_table(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> Non
 
 
 async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dict:
+    """Abre una mesa (llegan clientes). Idempotente: si ya está abierta,
+    devuelve su estado sin error (un doble clic no debe romper nada)."""
     mesa = await _obtener_mesa(db, tenant_id, table_id)
-    if await sesion_abierta(db, table_id):
-        raise HTTPException(409, "La mesa ya está ocupada")
-    sesion = TableSession(
-        tenant_id=tenant_id, table_id=table_id,
-        opened_by_id=DEMO_USER_ID, status=TableSessionStatus.OPEN, guest_count=1,
-    )
-    mesa.status = TableStatus.OCCUPIED
-    db.add(sesion)
-    await db.commit()
-    await db.refresh(sesion)
+    sesion = await sesion_abierta(db, table_id)
+    if sesion is None:
+        sesion = TableSession(
+            tenant_id=tenant_id, table_id=table_id,
+            opened_by_id=DEMO_USER_ID, status=TableSessionStatus.OPEN, guest_count=1,
+        )
+        mesa.status = TableStatus.OCCUPIED
+        db.add(sesion)
+        await db.commit()
+        await db.refresh(sesion)
+        await db.refresh(mesa)
     return _mesa_dict(mesa, sesion)
 
 
