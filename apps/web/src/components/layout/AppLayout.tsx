@@ -1,9 +1,9 @@
 import { Outlet, NavLink } from 'react-router-dom';
 
-export default function AppLayout() {
-  const linkClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors text-slate-400 hover:bg-slate-800 hover:text-white";
-  const activeClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors bg-amber-500 text-slate-900";
+const linkClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors text-slate-400 hover:bg-slate-800 hover:text-white";
+const activeClass = "flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors bg-amber-500 text-slate-900";
 
+export default function AppLayout() {
   return (
     <div className="min-h-screen bg-slate-900 text-white flex">
       
@@ -15,14 +15,21 @@ export default function AppLayout() {
         </div>
         
         <nav className="flex-1 space-y-2">
-          <NavLink to="/" end className={({ isActive }) => isActive ? activeClass : linkClass}>
-            📊 Dashboard
+          <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest px-4 pt-2">Operación</p>
+          <NavLink to="/pos" className={({ isActive }) => isActive ? activeClass : linkClass}>
+            🍽️ POS / Mesas
+          </NavLink>
+          <NavLink to="/cocina" className={({ isActive }) => isActive ? activeClass : linkClass}>
+            🍳 Cocina
+            <span className="ml-auto w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Comandas en vivo" />
           </NavLink>
           <NavLink to="/nuevo-pedido" className={({ isActive }) => isActive ? activeClass : linkClass}>
             📝 Nuevo Pedido
           </NavLink>
-          <NavLink to="/pos" className={({ isActive }) => isActive ? activeClass : linkClass}>
-            🍽️ POS / Mesas
+
+          <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest px-4 pt-4">Gestión</p>
+          <NavLink to="/" end className={({ isActive }) => isActive ? activeClass : linkClass}>
+            📊 Dashboard
           </NavLink>
           <NavLink to="/recetas" className={({ isActive }) => isActive ? activeClass : linkClass}>
             📖 Recetas
