@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Mesa, MesaInput } from '@/types/pos';
+import { toastError } from "@/lib/alertas";
 
 interface Props {
   mesa: Mesa | null; // null = crear nueva
@@ -36,27 +37,21 @@ export const ModalMesa = ({ mesa, onClose, onSave }: Props) => {
           {mesa ? '✏️ Editar mesa' : '➕ Nueva mesa'}
         </h3>
         <p className="text-slate-400 text-sm mb-4">
-          {mesa ? 'Actualiza los datos de la mesa.' : 'Registra una mesa del restaurante.'}
+          {mesa
+            ? 'Puedes cambiar su código, nombre, capacidad y zona.'
+            : 'Registra una mesa del restaurante.'}
         </p>
 
-        <label className="text-xs text-slate-400">Código (corto y único)</label>
-        <input
-          value={form.code}
-          onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-          disabled={!!mesa}
-          placeholder="Ej: M1, T2"
-          className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-3 outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
-        />
-
-        <label className="text-xs text-slate-400">Nombre visible</label>
-        <input
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-          placeholder="Ej: Mesa 1, Terraza 2"
-          className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-3 outline-none focus:ring-2 focus:ring-amber-500"
-        />
-
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-xs text-slate-400">Código (corto y único)</label>
+            <input
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+              placeholder="Ej: M1, T2"
+              className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
           <div>
             <label className="text-xs text-slate-400">Capacidad (puestos)</label>
             <input
@@ -66,16 +61,23 @@ export const ModalMesa = ({ mesa, onClose, onSave }: Props) => {
               className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
             />
           </div>
-          <div>
-            <label className="text-xs text-slate-400">Zona</label>
-            <input
-              value={form.zone ?? ''}
-              onChange={(e) => setForm({ ...form, zone: e.target.value })}
-              placeholder="Ej: Salón, Terraza"
-              className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg outline-none focus:ring-2 focus:ring-amber-500"
-            />
-          </div>
         </div>
+
+        <label className="text-xs text-slate-400">Nombre visible</label>
+        <input
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          placeholder="Ej: Mesa 1, Terraza 2"
+          className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-3 outline-none focus:ring-2 focus:ring-amber-500"
+        />
+
+        <label className="text-xs text-slate-400">Zona</label>
+        <input
+          value={form.zone ?? ''}
+          onChange={(e) => setForm({ ...form, zone: e.target.value })}
+          placeholder="Ej: Salón, Terraza, Barra"
+          className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none focus:ring-2 focus:ring-amber-500"
+        />
 
         <div className="flex gap-2">
           <button
