@@ -6,6 +6,7 @@ import { ModalMesa } from '@/components/pos/ModalMesa';
 import {
   useActualizarMesa, useCrearMesa, useDesactivarMesa, useMesas,
 } from '@/hooks/usePos';
+import { confirmarAccion, toastError, toastExito, toastInfo } from '@/lib/alertas';
 import type { Mesa, MesaInput } from '@/types/pos';
 
 export default function TablesPage() {
@@ -15,12 +16,11 @@ export default function TablesPage() {
   const desactivarMesa = useDesactivarMesa();
 
   const [seleccionadaId, setSeleccionadaId] = useState<string | null>(null);
-  const [mensaje, setMensaje] = useState<string | null>(null);
-  const [modalAbierto, setModalAbierto] = useState(false);
+  const [modalCreacion, setModalCreacion] = useState(false);
+  const [modalEdicion, setModalEdicion] = useState(false);
 
   const mesaSeleccionada: Mesa | null = mesas?.find((m) => m.id === seleccionadaId) ?? null;
 
-  // Zonas dinámicas: lo que venga en zone, y el resto cae en "Salón"
   const zonas = new Map<string, Mesa[]>();
   mesas?.forEach((m) => {
     const zona = m.zone ?? 'Salón';
@@ -31,40 +31,48 @@ export default function TablesPage() {
   const guardarMesa = async (datos: MesaInput, mesaId: string | null): Promise<boolean> => {
     try {
       if (mesaId) {
-        const { code, ...resto } = datos;
-        await actualizarMesa.mutateAsync({ mesaId, datos: resto });
-        setMensaje('✅ Mesa actualizada');
+        await actualizarMesa.mutateAsync({ mesaId, datos });
+        toastExito(`${datos.name} actualizada`);
       } else {
         await crearMesa.mutateAsync(datos);
-        setMensaje(`✅ Mesa ${datos.code} lista`);
+        toastExito(`${datos.name} lista (${datos.zone ?? 'Salón'})`);
       }
       return true;
     } catch (err: unknown) {
       const detalle = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setMensaje(`❌ ${detalle ?? 'Error al guardar la mesa'}`);
+      toastError(detalle ?? 'Error al guardar la mesa');
       return false;
     }
   };
 
   const desactivar = async () => {
     if (!mesaSeleccionada) return;
-    if (!window.confirm(`¿Desactivar ${mesaSeleccionada.name}? Su historial de ventas se conserva, pero dejará de aparecer en el mapa.`)) return;
+    const ok = await confirmarAccion(
+      `¿Desactivar ${mesaSeleccionada.name}?`,
+      'Su historial de ventas se conserva, pero dejará de aparecer en el mapa.',
+      'Sí, desactivar',
+    );
+    if (!ok) return;
     const res = await desactivarMesa.mutateAsync(mesaSeleccionada.id);
-    setMensaje(`📦 ${res.mensaje}`);
+    toastInfo(res.mensaje);
     setSeleccionadaId(null);
   };
 
   const crearDemo = async () => {
-    setMensaje('Creando mesas de demostración...');
-    const datos = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'T1', 'T2'].map((code, i) => ({
-      code,
-      name: code.startsWith('T') ? `Terraza ${code.slice(1)}` : `Mesa ${code.slice(1)}`,
-      capacity: 4,
-      zone: code.startsWith('T') ? 'Terraza' : 'Salón',
-    }));
+    toastInfo('Creando el restaurante completo...');
+    // 6 mesas en Salón + 4 en Terraza (las existentes se conservan)
+    const datos = [
+      ...['M1', 'M2', 'M3', 'M4', 'M5', 'M6'].map((code, i) => ({
+        code, name: `Mesa ${i + 1}`, capacity: 4, zone: 'Salón',
+      })),
+      ...['T1', 'T2', 'T3', 'T4'].map((code, i) => ({
+        code, name: `Terraza ${i + 1}`, capacity: 4, zone: 'Terraza',
+      })),
+    ];
     const resultados = await Promise.allSettled(datos.map((d) => crearMesa.mutateAsync(d)));
     const ok = resultados.filter((r) => r.status === 'fulfilled').length;
-    setMensaje(`✅ ${ok} mesas listas (las existentes se conservan)`);
+    const yaHabia = datos.length - ok;
+    toastExito(`${ok} mesas listas${yaHabia > 0 ? ` (${yaHabia} ya existían)` : ''} 🪑`);
   };
 
   return (
@@ -73,7 +81,7 @@ export default function TablesPage() {
         <h1 className="text-3xl font-bold text-white">POS / Comedor 🍽️</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => setModalAbierto(true)}
+            onClick={() => setModalCreacion(true)}
             className="bg-amber-500 hover:bg-amber-600 text-slate-900 text-sm font-bold px-4 py-2 rounded-lg transition-colors"
           >
             ➕ Nueva mesa
@@ -83,7 +91,7 @@ export default function TablesPage() {
             disabled={crearMesa.isPending}
             className="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
           >
-            ⚡ Crear mesas demo
+            ⚡ Crear restaurante demo
           </button>
         </div>
       </div>
@@ -91,18 +99,8 @@ export default function TablesPage() {
         Mapa del restaurante. Clic en una mesa para abrir la cuenta o tomar el pedido.
       </p>
 
-      {mensaje && (
-        <div className="bg-slate-800 border border-slate-600 text-slate-300 p-3 rounded-lg mb-6 text-sm">
-          {mensaje}
-        </div>
-      )}
-
-      {modalAbierto && (
-        <ModalMesa
-          mesa={null}
-          onClose={() => setModalAbierto(false)}
-          onSave={guardarMesa}
-        />
+      {modalCreacion && (
+        <ModalMesa mesa={null} onClose={() => setModalCreacion(false)} onSave={guardarMesa} />
       )}
 
       <div className="flex gap-8">
@@ -116,14 +114,14 @@ export default function TablesPage() {
           ) : !mesas || mesas.length === 0 ? (
             <div className="text-center py-16">
               <span className="text-6xl">🪑</span>
-              <p className="text-slate-400 mt-4">No hay mesas aún. Crea la primera con "➕ Nueva mesa".</p>
+              <p className="text-slate-400 mt-4">No hay mesas aún. Crea la primera o usa el botón demo.</p>
             </div>
           ) : (
             [...zonas.entries()].map(([zona, mesasZona], idx) => (
               <div key={zona} className={idx > 0 ? 'border-t border-slate-700/50 pt-10 mt-10' : ''}>
                 <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-6 flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${idx === 0 ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                  {zona}
+                  {zona === 'Terraza' ? '🌙 ' : ''}{zona}
                 </h3>
                 <div className="grid grid-cols-4 sm:grid-cols-5 gap-8 justify-items-center">
                   {mesasZona.map((mesa) => (
@@ -131,10 +129,7 @@ export default function TablesPage() {
                       key={mesa.id}
                       mesa={mesa}
                       seleccionada={seleccionadaId === mesa.id}
-                      onClick={() => {
-                        setSeleccionadaId(mesa.id);
-                        setMensaje(null);
-                      }}
+                      onClick={() => setSeleccionadaId(mesa.id)}
                     />
                   ))}
                 </div>
@@ -147,10 +142,9 @@ export default function TablesPage() {
         <div className="w-1/3 flex flex-col gap-6">
           {mesaSeleccionada ? (
             <>
-              {/* Barra de gestión de la mesa */}
               <div className="flex gap-2">
                 <button
-                  onClick={() => setModalAbierto(true)}
+                  onClick={() => setModalEdicion(true)}
                   className="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded-lg transition-colors"
                 >
                   ✏️ Editar
@@ -166,16 +160,16 @@ export default function TablesPage() {
                 )}
               </div>
 
-              {modalAbierto && (
-                <ModalMesa mesa={mesaSeleccionada} onClose={() => setModalAbierto(false)} onSave={guardarMesa} />
+              {modalEdicion && (
+                <ModalMesa mesa={mesaSeleccionada} onClose={() => setModalEdicion(false)} onSave={guardarMesa} />
               )}
 
               <PanelCuenta mesa={mesaSeleccionada} />
               {mesaSeleccionada.status !== 'AVAILABLE' && (
                 <MenuRapido
                   tableId={mesaSeleccionada.id}
-                  bloqueado={mesaSeleccionada.order_id === null || true}
-                  onAgregado={(nombre) => setMensaje(`✅ ${nombre} agregado a la cuenta`)}
+                  bloqueado={mesaSeleccionada.order_id !== null && mesaSeleccionada.status === 'OCCUPIED'}
+                  onAgregado={(nombre) => toastExito(`${nombre} agregado a la cuenta`)}
                 />
               )}
             </>
