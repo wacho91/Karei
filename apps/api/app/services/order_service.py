@@ -51,6 +51,7 @@ async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) ->
             tenant_id=tenant_id, branch_id=mesa.branch_id, session_id=sesion.id,
             table_id=table_id, waiter_id=DEMO_USER_ID,
             order_number=await _siguiente_numero(db, tenant_id),
+            tip=Decimal("0"),  # ← FIX: explícito, sin confiar en defaults de flush
         )
         db.add(order)
 
@@ -166,6 +167,10 @@ async def order_a_out(db: AsyncSession, order: Order) -> dict:
 
 
 def _recalcular(order: Order) -> None:
+    """Recalcula subtotal y total. Tolerante a tip=None: en objetos nuevos,
+    los defaults de SQLAlchemy se aplican en flush, no al instanciar."""
+    if order.tip is None:  # ← FIX: blindaje anti-NoneType
+        order.tip = Decimal("0")
     order.subtotal = sum(
         (i.quantity * i.unit_price for i in order.items), Decimal("0")
     )
