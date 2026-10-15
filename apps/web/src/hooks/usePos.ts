@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { CheckoutResultado, Mesa, MesaInput, Pedido, RecetaMenu } from '@/types/pos';
+import type {
+  CheckoutResultado, ComandaCocina, Mesa, MesaInput, Pedido, RecetaMenu,
+} from '@/types/pos';
 
 // ============ CONSULTAS ============
 
@@ -33,6 +35,17 @@ export function useMenuRecetas() {
       const { data } = await api.get<RecetaMenu[]>('/inventory/recipes');
       return data.filter((r) => r.is_active);
     },
+  });
+}
+
+export function useComandasCocina() {
+  return useQuery({
+    queryKey: ['pos', 'kitchen'],
+    queryFn: async () => {
+      const { data } = await api.get<ComandaCocina[]>('/pos/kitchen/orders');
+      return data;
+    },
+    refetchInterval: 10_000,
   });
 }
 
@@ -139,17 +152,6 @@ export function useCobrar() {
   });
 }
 
-export function useComandasCocina() {
-  return useQuery({
-    queryKey: ['pos', 'kitchen'],
-    queryFn: async () => {
-      const { data } = await api.get<ComandaCocina[]>('/pos/kitchen/orders');
-      return data;
-    },
-    refetchInterval: 10_000, // la cocina se actualiza sola
-  });
-}
-
 export function useAvanzarComanda() {
   const invalidar = useInvalidarPOS();
   return useMutation({
@@ -158,6 +160,48 @@ export function useAvanzarComanda() {
         `/pos/orders/${orderId}/advance`,
       );
       return data;
+    },
+    onSuccess: invalidar,
+  });
+}
+
+/** Orquestador del Nuevo Pedido: abre la mesa si está libre, agrega items
+ *  y opcionalmente envía directo a cocina. Todo en un solo clic. */
+export function useEnviarNuevaComanda() {
+  const invalidar = useInvalidarPOS();
+  return useMutation({
+    mutationFn: async (p: {
+      tableId: string;
+      items: { recipe_id: string; quantity: number }[];
+      directoACocina: boolean;
+    }) => {
+      // 1. Estado fresco de la mesa
+      const { data: mesas } = await api.get<Mesa[]>('/pos/tables');
+      const mesa = mesas.find((m) => m.id === p.tableId);
+      if (!mesa) throw new Error('Mesa no encontrada');
+
+      // 2. Si está libre, se abre sola (llegaron clientes)
+      if (mesa.status === 'AVAILABLE') {
+        await api.post(`/pos/tables/${p.tableId}/open`);
+      }
+
+      // 3. Si ya tiene pedido en cocina, no se puede agregar esta ronda
+      const { data: pedido } = await api.get<Pedido | null>(`/pos/tables/${p.tableId}/order`);
+      if (pedido && pedido.status !== 'CONFIRMED') {
+        throw new Error(`${mesa.name} ya tiene un pedido en cocina. Agrégalo desde el POS.`);
+      }
+
+      // 4. Agregar los items a la cuenta
+      const { data: actualizado } = await api.post<Pedido>(
+        `/pos/tables/${p.tableId}/items`,
+        { items: p.items },
+      );
+
+      // 5. Si el mesero quiere, directo a cocina
+      if (p.directoACocina) {
+        await api.post(`/pos/orders/${actualizado.id}/send`);
+      }
+      return actualizado;
     },
     onSuccess: invalidar,
   });

@@ -60,3 +60,12 @@ export type CheckoutResultado = {
   total: number;
   method: string;
 };
+
+export type ComandaCocina = {
+  id: string;
+  order_number: string;
+  status: string;
+  table_name: string;
+  created_at: string | null;
+  items: { id: string; recipe_id?: string; recipe_name: string; quantity: number; notes: string | null }[];
+};
