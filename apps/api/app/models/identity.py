@@ -85,6 +85,7 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mfa_secret: Mapped[str | None] = mapped_column(Text)
+    pin_hash: Mapped[str | None] = mapped_column(Text)  # Login rápido por PIN (personal)
 
     tenant: Mapped["Tenant"] = relationship(back_populates="users")
     user_roles: Mapped[list["UserRole"]] = relationship(back_populates="user", cascade="all, delete-orphan")
