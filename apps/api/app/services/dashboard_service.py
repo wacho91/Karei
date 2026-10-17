@@ -12,6 +12,11 @@ from app.models.tables import Table
 HORAS_COLOMBIA = 5  # GMT-5
 
 
+def _texto(valor) -> str:
+    """Enums -> texto plano. Ej: TableStatus.AVAILABLE -> 'AVAILABLE'."""
+    return valor.value if hasattr(valor, "value") else str(valor)
+
+
 def _inicio_hoy_utc() -> datetime:
     """Medianoche de hoy en Colombia, expresada en UTC (así guarda SQLite)."""
     ahora = datetime.now(timezone.utc)
@@ -56,8 +61,7 @@ async def _ventas_periodo(db: AsyncSession, tenant_id: UUID, desde: datetime) ->
 
 
 async def _costo_ventas(db: AsyncSession, tenant_id: UUID, desde: datetime) -> float:
-    """Food Cost REAL: costo de ingredientes de todo lo vendido en el periodo.
-    order_items x recipe_items x ingredients, sumado directo en la BD."""
+    """Food Cost REAL: costo de ingredientes de todo lo vendido en el periodo."""
     result = await db.execute(
         select(func.sum(OrderItem.quantity * RecipeItem.quantity * Ingredient.cost_per_unit))
         .join(Order, OrderItem.order_id == Order.id)
@@ -126,10 +130,12 @@ async def _stock_bajo(db: AsyncSession, tenant_id: UUID) -> list[dict]:
 
 
 async def _estado_mesas(db: AsyncSession, tenant_id: UUID) -> dict:
+    """Conteo de mesas por estado. FIX: los enums se convierten a texto
+    antes de comparar (SQLite los devuelve como TableStatus.X al agrupar)."""
     filas = (await db.execute(
         select(Table.status, func.count(Table.id))
         .where(Table.tenant_id == tenant_id, Table.is_active == True)
         .group_by(Table.status)
     )).all()
-    conteo = {str(fila[0]): int(fila[1]) for fila in filas}
+    conteo = {_texto(fila[0]): int(fila[1]) for fila in filas}
     return {"libres": conteo.get("AVAILABLE", 0), "ocupadas": conteo.get("OCCUPIED", 0)}
