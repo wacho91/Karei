@@ -1,96 +1,158 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { api } from '../lib/api';
+import { useAuthStore, type UsuarioSesion } from '../store/authStore';
+import PinPad from '@/components/auth/PinPad';
+
+interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user: UsuarioSesion;
+}
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('criskol.71@gmail.com');
+  const navigate = useNavigate();
+  const token = useAuthStore((s) => s.token);
+  const usuario = useAuthStore((s) => s.usuario);
+  const setSession = useAuthStore((s) => s.setSession);
+  const homePorRol = useAuthStore((s) => s.homePorRol);
+
+  const [pestana, setPestana] = useState<'admin' | 'equipo'>('admin');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-   const navigate = useNavigate();
+  const [cargando, setCargando] = useState(false);
+  const [mensajeError, setMensajeError] = useState<string | null>(null);
+  const [pinError, setPinError] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // ya con sesión → directo a su home
+  if (token && usuario) return <Navigate to={homePorRol()} replace />;
+
+  const entrarAdmin = async (e: FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError('');
-
+    if (cargando) return;
+    setMensajeError(null);
+    setCargando(true);
     try {
-      // FastAPI (OAuth2PasswordRequestForm) exige que enviemos los datos como formulario, no como JSON
-      const formData = new URLSearchParams();
-      formData.append('username', email);
-      formData.append('password', password);
-
-      const response = await fetch('http://localhost:8000/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: formData.toString()
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Error al iniciar sesión');
-      }
-
-      // ¡Login exitoso! Guardamos el token y redirigimos con React Router
-      localStorage.setItem('karei_token', data.access_token);
-      navigate('/'); 
-
+      // El backend espera formulario OAuth2 (username/password), NO JSON
+      const body = new URLSearchParams();
+      body.set('username', email.trim());
+      body.set('password', password);
+      const { data } = await api.post<LoginResponse>('/auth/login', body);
+      setSession(data.access_token, data.user);
+      navigate(homePorRol(), { replace: true });
     } catch (err: any) {
-      setError(err.message);
+      const detalle = err?.response?.data?.detail;
+      setMensajeError(typeof detalle === 'string' ? detalle : 'No pudimos iniciar sesión. Revisa tus credenciales.');
     } finally {
-      setLoading(false);
+      setCargando(false);
+    }
+  };
+
+  const entrarConPin = async (pin: string) => {
+    setMensajeError(null);
+    setCargando(true);
+    try {
+      const { data } = await api.post<LoginResponse>('/auth/login-pin', { pin });
+      setSession(data.access_token, data.user);
+      navigate(homePorRol(), { replace: true });
+    } catch (err: any) {
+      const detalle = err?.response?.data?.detail;
+      setMensajeError(typeof detalle === 'string' ? detalle : 'PIN incorrecto');
+      setPinError(true);
+      window.setTimeout(() => setPinError(false), 450);
+    } finally {
+      setCargando(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4 py-12">
-      <div className="max-w-md w-full bg-slate-800/50 backdrop-blur-xl p-8 rounded-2xl shadow-2xl border border-slate-700">
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-extrabold text-amber-500 mb-2">Kārei 🍜</h1>
-          <p className="text-slate-400 tracking-wide font-medium">SaaS GastroTech de Nivel Enterprise</p>
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 px-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 text-center">
+          <h1 className="text-4xl font-black tracking-tight text-white">Kārei</h1>
+          <p className="mt-1 text-sm text-slate-400">ERP Gastronómico</p>
         </div>
-        
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Correo Electrónico</label>
-            <input 
-              type="email" 
-              required 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition"
-              placeholder="admin@karei.com"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Contraseña / PIN</label>
-            <input 
-              type="password" 
-              required 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition"
-              placeholder="********"
-            />
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl backdrop-blur">
+          {/* pestañas */}
+          <div className="mb-6 grid grid-cols-2 gap-1 rounded-xl bg-slate-800/80 p-1">
+            <button
+              type="button"
+              onClick={() => { setPestana('admin'); setMensajeError(null); }}
+              className={`rounded-lg py-2 text-sm font-semibold transition-colors ${
+                pestana === 'admin' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Administrador
+            </button>
+            <button
+              type="button"
+              onClick={() => { setPestana('equipo'); setMensajeError(null); }}
+              className={`rounded-lg py-2 text-sm font-semibold transition-colors ${
+                pestana === 'equipo' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Equipo
+            </button>
           </div>
 
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-3 rounded-lg">
-              {error}
+          {mensajeError && (
+            <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {mensajeError}
             </div>
           )}
 
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-3 rounded-lg transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Verificando...' : 'Iniciar Sesión'}
-          </button>
-        </form>
+          {pestana === 'admin' ? (
+            <form onSubmit={entrarAdmin} className="space-y-4">
+              <div>
+                <label htmlFor="email" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Correo
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@karei.app"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label htmlFor="password" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Contraseña
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-amber-500"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={cargando}
+                className="w-full rounded-lg bg-amber-500 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-60"
+              >
+                {cargando ? 'Entrando...' : 'Entrar'}
+              </button>
+            </form>
+          ) : (
+            <div className="flex flex-col items-center">
+              <p className="mb-5 text-center text-sm text-slate-400">Ingresa tu PIN de 4 dígitos</p>
+              <PinPad onCompleto={entrarConPin} error={pinError} cargando={cargando} />
+            </div>
+          )}
+        </div>
+
+        <p className="mt-6 text-center text-xs text-slate-500">
+          Acceso privado · Solo personal autorizado
+        </p>
       </div>
     </div>
   );
