@@ -44,7 +44,7 @@ export const useAuthStore = create<AuthEstado>()(
         const roles = u?.roles ?? [];
         if (roles.includes('ADMIN')) return '/dashboard';
         if (roles.includes('WAITER')) return '/pos';
-        if (roles.includes('KITCHEN')) return '/kds';
+        if (roles.includes('KITCHEN')) return '/cocina'; // ← EL CAMBIO (antes decía '/kds')
         return '/login';
       },
     }),
