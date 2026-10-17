@@ -1,61 +1,53 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 
-interface AuthUser {
+export type Rol = 'ADMIN' | 'WAITER' | 'KITCHEN';
+
+export interface UsuarioSesion {
   id: string;
-  tenantId: string;
   email: string;
-  fullName: string;
-  roles: string[];
-  permissions: string[];
+  full_name: string;
+  tenant_id: string;
+  roles: Rol[];
 }
 
-interface AuthState {
-  accessToken: string | null;
-  refreshToken: string | null;
-  user: AuthUser | null;
-  isAuthenticated: boolean;
-  setSession: (payload: {
-    accessToken: string;
-    refreshToken: string;
-    user: AuthUser;
-  }) => void;
+interface AuthEstado {
+  token: string | null;
+  usuario: UsuarioSesion | null;
+  setSession: (token: string, usuario: UsuarioSesion) => void;
   logout: () => void;
-  hasPermission: (permission: string) => boolean;
+  tieneRol: (...roles: Rol[]) => boolean;
+  homePorRol: () => string;
 }
 
-export const useAuthStore = create<AuthState>()(
+export const useAuthStore = create<AuthEstado>()(
   persist(
     (set, get) => ({
-      accessToken: null,
-      refreshToken: null,
-      user: null,
-      isAuthenticated: false,
-      setSession: ({ accessToken, refreshToken, user }) =>
-        set({ accessToken, refreshToken, user, isAuthenticated: true }),
-      logout: () =>
-        set({
-          accessToken: null,
-          refreshToken: null,
-          user: null,
-          isAuthenticated: false,
-        }),
-      hasPermission: (permission) => {
-        const { user } = get();
-        if (!user) return false;
-        if (user.permissions.includes('*')) return true;
-        return user.permissions.includes(permission);
+      token: null,
+      usuario: null,
+
+      setSession: (token, usuario) => set({ token, usuario }),
+
+      logout: () => set({ token: null, usuario: null }),
+
+      // ADMIN siempre pasa (misma regla que el backend)
+      tieneRol: (...roles) => {
+        const u = get().usuario;
+        if (!u) return false;
+        const misRoles = u.roles ?? [];
+        if (misRoles.includes('ADMIN')) return true;
+        return roles.some((r) => misRoles.includes(r));
+      },
+
+      homePorRol: () => {
+        const u = get().usuario;
+        const roles = u?.roles ?? [];
+        if (roles.includes('ADMIN')) return '/dashboard';
+        if (roles.includes('WAITER')) return '/pos';
+        if (roles.includes('KITCHEN')) return '/kds';
+        return '/login';
       },
     }),
-    {
-      name: 'karei.auth',
-      storage: createJSONStorage(() => localStorage),
-      partialize: (s) => ({
-        accessToken: s.accessToken,
-        refreshToken: s.refreshToken,
-        user: s.user,
-        isAuthenticated: s.isAuthenticated,
-      }),
-    },
-  ),
+    { name: 'karei-auth' }
+  )
 );
