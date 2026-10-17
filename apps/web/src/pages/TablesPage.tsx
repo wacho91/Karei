@@ -8,6 +8,7 @@ import {
 } from '@/hooks/usePos';
 import { confirmarAccion, toastError, toastExito, toastInfo } from '@/lib/alertas';
 import type { Mesa, MesaInput } from '@/types/pos';
+import { usePedidoActivo } from '@/hooks/usePos';
 
 export default function TablesPage() {
   const { data: mesas, isLoading } = useMesas();
@@ -20,6 +21,7 @@ export default function TablesPage() {
   const [modalEdicion, setModalEdicion] = useState(false);
 
   const mesaSeleccionada: Mesa | null = mesas?.find((m) => m.id === seleccionadaId) ?? null;
+  const { data: pedidoMesa } = usePedidoActivo(mesaSeleccionada?.id ?? null);
 
   const zonas = new Map<string, Mesa[]>();
   mesas?.forEach((m) => {
@@ -168,7 +170,7 @@ export default function TablesPage() {
               {mesaSeleccionada.status !== 'AVAILABLE' && (
                 <MenuRapido
                   tableId={mesaSeleccionada.id}
-                  bloqueado={mesaSeleccionada.order_id !== null && mesaSeleccionada.status === 'OCCUPIED'}
+                  bloqueado={!!pedidoMesa && pedidoMesa.status !== 'CONFIRMED'}
                   onAgregado={(nombre) => toastExito(`${nombre} agregado a la cuenta`)}
                 />
               )}
