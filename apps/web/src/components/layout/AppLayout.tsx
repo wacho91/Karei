@@ -8,6 +8,8 @@ interface ItemNav {
   roles: Rol[];
 }
 
+// Solo rutas que EXISTEN en App.tsx. Cuando tengas páginas de
+// Inventario/Compras, agrégalas aquí y en App.tsx al tiempo.
 const NAV: ItemNav[] = [
   {
     to: '/dashboard', etiqueta: 'Dashboard', roles: ['ADMIN'],
@@ -18,20 +20,12 @@ const NAV: ItemNav[] = [
     d: 'M3 3h8v8H3V3Zm10 0h8v8h-8V3ZM3 13h8v8H3v-8Zm10 0h8v8h-8v-8Z',
   },
   {
-    to: '/kds', etiqueta: 'Cocina', roles: ['KITCHEN'],
+    to: '/cocina', etiqueta: 'Cocina', roles: ['KITCHEN'],
     d: 'M12 2a10 10 0 1 0 .01 20.01A10 10 0 0 0 12 2Zm1 5h-2v6l5 3 1-1.73-4-2.27V7Z',
-  },
-  {
-    to: '/inventario', etiqueta: 'Inventario', roles: ['ADMIN'],
-    d: 'M3 3h18v4H3V3Zm1 6h16v12H4V9Zm5 3v2h6v-2H9Z',
   },
   {
     to: '/recetas', etiqueta: 'Recetas', roles: ['ADMIN'],
     d: 'M6 2h9l5 5v15H6V2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v-2H8v2Zm0 4h8v-2H8v2Z',
-  },
-  {
-    to: '/compras', etiqueta: 'Compras', roles: ['ADMIN'],
-    d: 'M6 7V6a6 6 0 1 1 12 0v1h3l-1.2 14H4.2L3 7h3Zm2 0h8V6a4 4 0 0 0-8 0v1Z',
   },
 ];
 
