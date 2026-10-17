@@ -190,7 +190,7 @@ async def delete_table(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dic
     return {"mensaje": "Mesa eliminada", "desactivada": False}
 
 
-async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dict:
+async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID, user_id: UUID) -> dict:
     """Abre una mesa (llegan clientes). Idempotente: si ya está abierta,
     devuelve su estado sin error (un doble clic no debe romper nada)."""
     mesa = await _obtener_mesa(db, tenant_id, table_id)
@@ -198,7 +198,7 @@ async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dict:
     if sesion is None:
         sesion = TableSession(
             tenant_id=tenant_id, table_id=table_id,
-            opened_by_id=DEMO_USER_ID, status=TableSessionStatus.OPEN, guest_count=1,
+            opened_by_id=user_id, status=TableSessionStatus.OPEN, guest_count=1,
         )
         mesa.status = TableStatus.OCCUPIED
         db.add(sesion)

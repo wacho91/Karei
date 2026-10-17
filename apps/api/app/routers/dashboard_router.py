@@ -1,15 +1,20 @@
-"""Router del Dashboard: resumen financiero y operativo (sin lógica)."""
+"""Router del Dashboard: resumen financiero (solo el dueño ve números)."""
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.deps.auth import AuthContext, get_auth_context, require_roles
 from app.services import dashboard_service
-from app.services.table_service import DEMO_TENANT_ID
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+router = APIRouter(
+    prefix="/dashboard", tags=["Dashboard"],
+    dependencies=[Depends(require_roles("ADMIN"))],
+)
 
 
-# TEMPORAL: contexto demo hasta conectar el JWT real (módulo de roles).
 @router.get("/summary")
-async def resumen(db: AsyncSession = Depends(get_db)):
-    return await dashboard_service.summary(db, DEMO_TENANT_ID)
+async def resumen(
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await dashboard_service.summary(db, ctx.tenant_id)

@@ -27,7 +27,7 @@ async def get_active_order(db: AsyncSession, tenant_id: UUID, table_id: UUID) ->
     return result.scalar_one_or_none()
 
 
-async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) -> dict:
+async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, user_id: UUID, datos) -> dict:
     sesion = await sesion_abierta(db, table_id)
     if not sesion:
         raise HTTPException(409, "La mesa no está abierta. Ábrela antes de tomar el pedido.")
@@ -49,7 +49,7 @@ async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) ->
         )).scalar_one()
         order = Order(
             tenant_id=tenant_id, branch_id=mesa.branch_id, session_id=sesion.id,
-            table_id=table_id, waiter_id=DEMO_USER_ID,
+            table_id=table_id, waiter_id=user_id,
             order_number=await _siguiente_numero(db, tenant_id),
             tip=Decimal("0"),  # ← FIX: explícito, sin confiar en defaults de flush
         )
