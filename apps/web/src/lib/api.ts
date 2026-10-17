@@ -12,7 +12,8 @@ export const api: AxiosInstance = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().accessToken;
+  // FIX: en el store el campo se llama "token" (no "accessToken").
+  const token = useAuthStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -24,6 +25,11 @@ api.interceptors.response.use(
   (error) => {
     if (error?.response?.status === 401) {
       useAuthStore.getState().logout();
+      // Si el token murió a mitad de sesión, mandamos al login.
+      // El guard evita bucle cuando ya estamos en /login (credenciales malas también dan 401).
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   },
