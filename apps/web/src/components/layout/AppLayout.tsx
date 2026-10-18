@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom'; // ← FIX: Navigate
+import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuthStore, type Rol } from '../../store/authStore';
 
 interface ItemNav {
@@ -8,8 +8,6 @@ interface ItemNav {
   roles: Rol[];
 }
 
-// Solo rutas que EXISTEN en App.tsx. Cuando tengas páginas de
-// Inventario/Compras, agrégalas aquí y en App.tsx al tiempo.
 const NAV: ItemNav[] = [
   {
     to: '/dashboard', etiqueta: 'Dashboard', roles: ['ADMIN'],
@@ -30,9 +28,9 @@ const NAV: ItemNav[] = [
 ];
 
 const COLOR_ROL: Record<string, string> = {
-  ADMIN: 'bg-amber-100 text-amber-800 border-amber-300',
-  WAITER: 'bg-sky-100 text-sky-800 border-sky-300',
-  KITCHEN: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  ADMIN: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  WAITER: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
+  KITCHEN: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
 };
 
 export default function AppLayout() {
@@ -40,7 +38,6 @@ export default function AppLayout() {
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
 
-  // ← FIX: antes retornaba null y la pantalla quedaba en blanco sin sesión
   if (!usuario) return <Navigate to="/login" replace />;
 
   const esAdmin = (usuario.roles ?? []).includes('ADMIN');
@@ -54,12 +51,16 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50">
-      {/* Sidebar (escritorio/tableta) */}
-      <aside className="hidden w-60 flex-col border-r border-slate-200 bg-white md:flex">
-        <div className="border-b border-slate-100 px-5 py-5">
-          <p className="text-2xl font-black tracking-tight text-slate-900">Kārei</p>
-          <p className="text-xs text-slate-500">ERP Gastronómico</p>
+    <div className="flex h-screen bg-slate-950">
+      {/* Sidebar oscuro */}
+      <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-900 md:flex">
+        <div className="border-b border-slate-800 px-5 py-5">
+          <p className="text-2xl font-black tracking-tight text-white">
+            Kārei<span className="text-amber-400">.</span>
+          </p>
+          <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/80">
+            ERP Gastronómico
+          </p>
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-4">
@@ -68,8 +69,10 @@ export default function AppLayout() {
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                  isActive ? 'bg-amber-50 text-amber-700' : 'text-slate-600 hover:bg-slate-100'
+                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
                 }`
               }
             >
@@ -81,18 +84,20 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <div className="border-t border-slate-100 p-3">
-          <p className="truncate px-2 text-sm font-semibold text-slate-800">{usuario.full_name}</p>
-          <div className="flex flex-wrap gap-1 px-2 pt-1.5">
-            {(usuario.roles ?? []).map((r) => (
-              <span key={r} className={`rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide ${COLOR_ROL[r]}`}>
-                {r}
-              </span>
-            ))}
+        <div className="border-t border-slate-800 p-3">
+          <div className="rounded-xl bg-slate-800/60 p-3">
+            <p className="truncate text-sm font-semibold text-slate-100">{usuario.full_name}</p>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {(usuario.roles ?? []).map((r) => (
+                <span key={r} className={`rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide ${COLOR_ROL[r]}`}>
+                  {r}
+                </span>
+              ))}
+            </div>
           </div>
           <button
             onClick={salir}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-red-600"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm font-medium text-slate-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
           >
             <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
               <path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2H5V5h5V3Zm4.6 3.6L13.2 8l2.9 3H8v2h8.1l-2.9 3 1.4 1.4L19.9 12l-5.3-5.4Z" />
@@ -104,20 +109,20 @@ export default function AppLayout() {
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Barra superior + nav horizontal (móvil) */}
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden">
-          <p className="text-xl font-black text-slate-900">Kārei</p>
-          <button onClick={salir} className="text-sm font-medium text-slate-600 hover:text-red-600">
+        <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3 md:hidden">
+          <p className="text-xl font-black text-white">Kārei<span className="text-amber-400">.</span></p>
+          <button onClick={salir} className="text-sm font-medium text-slate-400 hover:text-red-400">
             Salir
           </button>
         </header>
-        <nav className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2 md:hidden">
+        <nav className="flex gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900 px-3 py-2 md:hidden">
           {items.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
                 `whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${
-                  isActive ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-600'
+                  isActive ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300'
                 }`
               }
             >
@@ -126,7 +131,7 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+        <main className="flex-1 overflow-y-auto bg-slate-100 p-4 md:p-6">
           <Outlet />
         </main>
       </div>
