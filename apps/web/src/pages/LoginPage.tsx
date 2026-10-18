@@ -27,22 +27,27 @@ export default function LoginPage() {
   // ya con sesión → directo a su home
   if (token && usuario) return <Navigate to={homePorRol()} replace />;
 
-  const entrarAdmin = async (e: FormEvent) => {
+    const entrarAdmin = async (e: FormEvent) => {
     e.preventDefault();
     if (cargando) return;
     setMensajeError(null);
     setCargando(true);
     try {
-      // El backend espera formulario OAuth2 (username/password), NO JSON
+      // OAuth2 exige form-urlencoded; forzamos el header porque la instancia
+      // de axios lo trae fijo en application/json.
       const body = new URLSearchParams();
       body.set('username', email.trim());
       body.set('password', password);
-      const { data } = await api.post<LoginResponse>('/auth/login', body);
+      const { data } = await api.post<LoginResponse>('/auth/login', body, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
       setSession(data.access_token, data.user);
       navigate(homePorRol(), { replace: true });
     } catch (err: any) {
       const detalle = err?.response?.data?.detail;
-      setMensajeError(typeof detalle === 'string' ? detalle : 'No pudimos iniciar sesión. Revisa tus credenciales.');
+      setMensajeError(
+        typeof detalle === 'string' ? detalle : 'No pudimos iniciar sesión. Revisa tus credenciales.'
+      );
     } finally {
       setCargando(false);
     }
