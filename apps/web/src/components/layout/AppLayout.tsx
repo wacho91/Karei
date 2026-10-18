@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom'; // ← FIX: Navigate
 import { useAuthStore, type Rol } from '../../store/authStore';
 
 interface ItemNav {
@@ -40,7 +40,8 @@ export default function AppLayout() {
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
 
-  if (!usuario) return null; // RutaProtegida ya garantió la sesión
+  // ← FIX: antes retornaba null y la pantalla quedaba en blanco sin sesión
+  if (!usuario) return <Navigate to="/login" replace />;
 
   const esAdmin = (usuario.roles ?? []).includes('ADMIN');
   const items = NAV.filter(
