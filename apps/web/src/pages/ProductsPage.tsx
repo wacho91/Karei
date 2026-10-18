@@ -1,178 +1,350 @@
-import { useState } from 'react';
-import { useEnviarNuevaComanda, useMenuRecetas, useMesas } from '@/hooks/usePos';
-import { formatoCOP } from '@/lib/formato';
-import { toastError, toastExito } from '@/lib/alertas';
+import { useEffect, useMemo, useState } from 'react';
+import * as hooksPos from '../hooks/usePos';
 
-type ItemCarrito = { recipe_id: string; name: string; price: number; quantity: number };
+// Hooks que ya existen en el proyecto
+const useMenuRecetas = (hooksPos as any).useMenuRecetas;
+const useMesas = (hooksPos as any).useMesas;
+const useEnviarNuevaComanda = (hooksPos as any).useEnviarNuevaComanda;
+
+type ItemCarrito = {
+  recipe_id: string;
+  nombre: string;
+  precio: number;
+  quantity: number;
+  notes: string;
+};
+
+type Aviso = { tipo: 'ok' | 'error'; texto: string };
+
+// Extrae la lista sin importar si el hook devuelve el array o el resultado de react-query
+const extraerLista = (x: any): any[] => {
+  if (Array.isArray(x)) return x;
+  if (Array.isArray(x?.data)) return x.data;
+  if (Array.isArray(x?.data?.data)) return x.data.data;
+  return [];
+};
+
+const textoMesa = (m: any): string =>
+  m?.name ?? m?.label ?? (m?.number != null ? `Mesa ${m.number}` : null) ?? m?.code ?? 'Mesa';
+
+const categoriaDe = (r: any): string => {
+  const c = r?.category ?? r?.categoria ?? r?.category_name;
+  if (typeof c === 'string' && c.trim()) return c;
+  if (c?.name) return String(c.name);
+  return 'Otros';
+};
+
+const formatearPrecio = (v: number): string =>
+  new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v);
 
 export default function ProductsPage() {
-  const { data: recetas, isLoading } = useMenuRecetas();
-  const { data: mesas } = useMesas();
-  const enviar = useEnviarNuevaComanda();
-
-  const [mesaId, setMesaId] = useState('');
+  const [busqueda, setBusqueda] = useState('');
+  const [categoriaSel, setCategoriaSel] = useState('Todas');
+  const [mesaSel, setMesaSel] = useState('');
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
+  const [enviando, setEnviando] = useState(false);
+  const [aviso, setAviso] = useState<Aviso | null>(null);
 
-  const mesaSeleccionada = mesas?.find((m) => m.id === mesaId);
-  const subtotal = carrito.reduce((s, i) => s + i.price * i.quantity, 0);
+  const respuestaRecetas: any = useMenuRecetas ? useMenuRecetas() : null;
+  const respuestaMesas: any = useMesas ? useMesas() : null;
+  const mutacionEnvio: any = useEnviarNuevaComanda ? useEnviarNuevaComanda() : null;
 
-  const agregarAlCarrito = (r: { id: string; name: string; price: number }) => {
+  const recetas = useMemo(
+    () =>
+      extraerLista(respuestaRecetas).map((r: any, i: number) => ({
+        id: String(r?.id ?? r?.recipe_id ?? i),
+        nombre: String(r?.name ?? r?.nombre ?? r?.title ?? 'Ítem'),
+        precio: Number(r?.price ?? r?.precio ?? r?.sale_price ?? 0),
+        categoria: categoriaDe(r),
+      })),
+    [respuestaRecetas],
+  );
+
+  const mesas = useMemo(
+    () =>
+      extraerLista(respuestaMesas)
+        .map((m: any) => ({
+          id: String(m?.id ?? m?.table_id ?? ''),
+          texto: textoMesa(m),
+          zona:
+            typeof (m?.zone ?? m?.area) === 'string'
+              ? m?.zone ?? m?.area
+              : m?.zone?.name ?? m?.area?.name ?? '',
+          estado: String(m?.status ?? m?.estado ?? '').toLowerCase(),
+        }))
+        .filter((m: any) => m.id !== ''),
+    [respuestaMesas],
+  );
+
+  const mesasLibres = mesas.filter(
+    (m: any) =>
+      !m.estado || ['libre', 'disponible', 'available', 'free', 'open', 'activa'].includes(m.estado),
+  );
+  const opcionesMesa = mesasLibres.length > 0 ? mesasLibres : mesas;
+
+  const categorias = useMemo(() => {
+    const set = new Set<string>();
+    recetas.forEach((r: any) => set.add(r.categoria));
+    return ['Todas', ...Array.from(set)];
+  }, [recetas]);
+
+  useEffect(() => {
+    if (!aviso) return;
+    const t = setTimeout(() => setAviso(null), 3200);
+    return () => clearTimeout(t);
+  }, [aviso]);
+
+  const agregar = (receta: { id: string; nombre: string; precio: number }) => {
     setCarrito((prev) => {
-      const existe = prev.find((i) => i.recipe_id === r.id);
+      const existe = prev.find((it) => it.recipe_id === receta.id);
       if (existe) {
-        return prev.map((i) =>
-          i.recipe_id === r.id ? { ...i, quantity: i.quantity + 1 } : i,
-        );
+        return prev.map((it) => (it.recipe_id === receta.id ? { ...it, quantity: it.quantity + 1 } : it));
       }
-      return [...prev, { recipe_id: r.id, name: r.name, price: r.price, quantity: 1 }];
+      return [...prev, { recipe_id: receta.id, nombre: receta.nombre, precio: receta.precio, quantity: 1, notes: '' }];
     });
   };
 
   const cambiarCantidad = (recipeId: string, delta: number) => {
     setCarrito((prev) =>
       prev
-        .map((i) =>
-          i.recipe_id === recipeId ? { ...i, quantity: i.quantity + delta } : i,
-        )
-        .filter((i) => i.quantity > 0),
+        .map((it) => (it.recipe_id === recipeId ? { ...it, quantity: it.quantity + delta } : it))
+        .filter((it) => it.quantity > 0),
     );
   };
 
-  const enviarAMesa = async (directoACocina: boolean) => {
-    if (!mesaId || carrito.length === 0 || enviar.isPending) return;
+  const quitar = (recipeId: string) => setCarrito((prev) => prev.filter((it) => it.recipe_id !== recipeId));
+
+  const cambiarNotas = (recipeId: string, notas: string) =>
+    setCarrito((prev) => prev.map((it) => (it.recipe_id === recipeId ? { ...it, notes: notas } : it)));
+
+  const total = carrito.reduce((acc, it) => acc + it.precio * it.quantity, 0);
+
+  const enviar = async () => {
+    if (!mesaSel || carrito.length === 0 || enviando) return;
+    const mesa = opcionesMesa.find((m: any) => m.id === mesaSel);
+    const payload = {
+      table_id: mesaSel,
+      items: carrito.map((it) => ({
+        recipe_id: it.recipe_id,
+        quantity: it.quantity,
+        notes: it.notes.trim() ? it.notes.trim() : undefined,
+      })),
+    };
+    setEnviando(true);
     try {
-      await enviar.mutateAsync({
-        tableId: mesaId,
-        items: carrito.map(({ recipe_id, quantity }) => ({ recipe_id, quantity })),
-        directoACocina,
-      });
-      toastExito(
-        directoACocina
-          ? `🚀 Pedido enviado a cocina (${mesaSeleccionada?.name})`
-          : `🧾 Agregado a la cuenta de ${mesaSeleccionada?.name}`,
-      );
+      const enviarFn = mutacionEnvio?.mutateAsync ?? mutacionEnvio?.mutate;
+      if (!enviarFn) throw new Error('No se encontró la función de envío del pedido.');
+      await enviarFn(payload);
+      setAviso({ tipo: 'ok', texto: `Comanda enviada a ${mesa?.texto ?? 'la mesa'}. Cocina ya la está viendo.` });
       setCarrito([]);
-    } catch (err: unknown) {
-      const axiosDetalle = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      const mensaje = axiosDetalle ?? (err as Error)?.message ?? 'Error al enviar el pedido';
-      toastError(mensaje);
+      setMesaSel('');
+    } catch (e: any) {
+      const detalle = e?.response?.data?.detail;
+      const texto =
+        typeof detalle === 'string'
+          ? detalle
+          : 'No se pudo enviar la comanda. Revisa que la mesa esté libre e intenta de nuevo.';
+      setAviso({ tipo: 'error', texto });
+    } finally {
+      setEnviando(false);
     }
   };
 
+  const recetasFiltradas = recetas.filter(
+    (r: any) =>
+      (categoriaSel === 'Todas' || r.categoria === categoriaSel) &&
+      (busqueda.trim() === '' || r.nombre.toLowerCase().includes(busqueda.trim().toLowerCase())),
+  );
+
+  const qtyEnCarrito = (recipeId: string) => carrito.find((it) => it.recipe_id === recipeId)?.quantity ?? 0;
+
   return (
-    <div>
-      <h1 className="text-3xl font-bold text-white mb-2">Nuevo Pedido 📝</h1>
-      <p className="text-slate-400 mb-8">
-        Selecciona la mesa, arma el pedido del menú real y envíalo a la cuenta.
-      </p>
-
-      <div className="flex gap-8">
-        {/* === MENÚ REAL DE LA BASE DE DATOS === */}
-        <div className="w-2/3">
-          <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Menú</h3>
-          {isLoading ? (
-            <p className="text-slate-500 text-center py-16">Cargando menú...</p>
-          ) : !recetas || recetas.length === 0 ? (
-            <div className="text-center py-16">
-              <span className="text-6xl">📖</span>
-              <p className="text-slate-400 mt-4">
-                No hay recetas activas. Créalas en el módulo de Recetas.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {recetas.map((r) => (
-                <button
-                  key={r.id}
-                  onClick={() => agregarAlCarrito(r)}
-                  className="bg-slate-800/50 hover:bg-amber-500/10 hover:border-amber-500/50 border border-slate-700 text-white font-medium p-4 rounded-xl transition-colors text-left"
-                >
-                  {r.name}
-                  <span className="block text-amber-500 text-sm mt-1">{formatoCOP(r.price)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* === CARRITO === */}
-        <div className="w-1/3">
-          <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl">
-            <h3 className="text-slate-300 text-sm font-bold uppercase tracking-widest mb-4">Carrito</h3>
-
-            <label className="text-xs text-slate-400">Mesa destino</label>
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="mx-auto max-w-7xl px-4 py-6 lg:px-8">
+        <header className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Nuevo pedido</h1>
+            <p className="text-sm text-slate-400">
+              Arma la comanda, sube cantidades sin límite y deja las especificaciones para cocina.
+            </p>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mesa</span>
             <select
-              value={mesaId}
-              onChange={(e) => setMesaId(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 text-white p-3 rounded-lg mb-4 outline-none"
+              value={mesaSel}
+              onChange={(e) => setMesaSel(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-amber-400"
             >
-              <option value="">Seleccionar mesa...</option>
-              {mesas?.map((m) => (
+              <option value="">Selecciona una mesa…</option>
+              {opcionesMesa.map((m: any) => (
                 <option key={m.id} value={m.id}>
-                  {m.name} {m.status === 'AVAILABLE' ? '(libre)' : `(ocupada · ${formatoCOP(m.open_total)})`}
+                  {m.texto}
+                  {m.zona ? ` · ${m.zona}` : ''}
                 </option>
               ))}
             </select>
+          </label>
+        </header>
+
+        <div className="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_380px]">
+          <section>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar en el menú…"
+                className="w-full max-w-xs rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 outline-none focus:border-amber-400"
+              />
+              {categorias.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategoriaSel(c)}
+                  className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                    categoriaSel === c
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'border border-slate-700 bg-slate-900 text-slate-300 hover:border-amber-400/50'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+
+            {recetasFiltradas.length === 0 ? (
+              <p className="mt-6 rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center text-sm text-slate-500">
+                No hay ítems con esa búsqueda. Revisa el menú o crea recetas primero.
+              </p>
+            ) : (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {recetasFiltradas.map((r: any) => {
+                  const qty = qtyEnCarrito(r.id);
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => agregar(r)}
+                      className="group relative flex flex-col items-start gap-1 rounded-2xl border border-slate-800 bg-slate-900 p-4 text-left transition hover:border-amber-400/60 hover:bg-slate-800/80"
+                    >
+                      {qty > 0 && (
+                        <span className="absolute right-3 top-3 flex h-6 min-w-[24px] items-center justify-center rounded-full bg-amber-400 px-1.5 text-xs font-bold text-slate-950">
+                          {qty}
+                        </span>
+                      )}
+                      <span className="text-sm font-semibold text-slate-100">{r.nombre}</span>
+                      <span className="text-sm font-bold text-amber-400">{formatearPrecio(r.precio)}</span>
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition group-hover:bg-amber-400 group-hover:text-slate-950">
+                        Agregar +
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <aside className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 lg:sticky lg:top-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-300">Comanda</h2>
+              {carrito.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCarrito([])}
+                  className="text-xs font-medium text-slate-500 hover:text-rose-400"
+                >
+                  Vaciar
+                </button>
+              )}
+            </div>
 
             {carrito.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-8">Agrega productos al carrito.</p>
+              <p className="mt-6 rounded-xl border border-dashed border-slate-800 px-3 py-8 text-center text-xs text-slate-600">
+                Toca un ítem del menú para agregarlo. Suma cantidades con el botón + o desde el carrito.
+              </p>
             ) : (
-              <ul className="space-y-3 mb-4 max-h-64 overflow-y-auto">
-                {carrito.map((item) => (
-                  <li key={item.recipe_id} className="flex justify-between items-center text-slate-300 text-sm">
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
+              <ul className="mt-3 max-h-[52vh] space-y-3 overflow-y-auto pr-1">
+                {carrito.map((it) => (
+                  <li key={it.recipe_id} className="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-semibold text-slate-100">{it.nombre}</span>
+                      <button
+                        type="button"
+                        onClick={() => quitar(it.recipe_id)}
+                        className="text-xs font-medium text-slate-500 hover:text-rose-400"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => cambiarCantidad(item.recipe_id, -1)}
-                          className="w-6 h-6 bg-slate-700 hover:bg-slate-600 rounded text-white text-xs"
+                          type="button"
+                          onClick={() => cambiarCantidad(it.recipe_id, -1)}
+                          className="h-7 w-7 rounded-lg border border-slate-700 text-slate-200 hover:border-rose-400 hover:text-rose-400"
                         >
                           −
                         </button>
-                        <span className="w-7 text-center font-bold text-amber-400">{item.quantity}</span>
+                        <span className="w-6 text-center text-sm font-bold text-slate-100">{it.quantity}</span>
                         <button
-                          onClick={() => cambiarCantidad(item.recipe_id, 1)}
-                          className="w-6 h-6 bg-slate-700 hover:bg-slate-600 rounded text-white text-xs"
+                          type="button"
+                          onClick={() => cambiarCantidad(it.recipe_id, 1)}
+                          className="h-7 w-7 rounded-lg border border-slate-700 text-slate-200 hover:border-amber-400 hover:text-amber-400"
                         >
                           +
                         </button>
                       </div>
-                      <span>{item.name}</span>
+                      <span className="text-sm font-bold text-slate-300">{formatearPrecio(it.precio * it.quantity)}</span>
                     </div>
-                    <span className="font-medium">{formatoCOP(item.price * item.quantity)}</span>
+                    <textarea
+                      value={it.notes}
+                      onChange={(e) => cambiarNotas(it.recipe_id, e.target.value)}
+                      rows={2}
+                      maxLength={255}
+                      placeholder="Especificaciones para cocina: sin cebolla, sin aderezos, término…"
+                      className="mt-2 w-full resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-2 text-xs text-slate-200 placeholder:text-slate-600 outline-none focus:border-amber-400"
+                    />
+                    {it.notes.trim() && (
+                      <span className="mt-1 inline-block rounded-full bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                        Irá en la comanda
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
 
-            <div className="flex justify-between border-t border-slate-700 pt-3 mb-4">
-              <span className="text-slate-400">Subtotal</span>
-              <span className="text-lg font-bold text-white">{formatoCOP(subtotal)}</span>
-            </div>
-
-            <div className="flex flex-col gap-2">
+            <div className="mt-4 border-t border-slate-800 pt-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-400">Total preliminar</span>
+                <span className="text-lg font-bold text-amber-400">{formatearPrecio(total)}</span>
+              </div>
               <button
-                onClick={() => enviarAMesa(false)}
-                disabled={!mesaId || carrito.length === 0 || enviar.isPending}
-                className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-slate-900 font-bold py-3 rounded-lg transition-colors"
+                type="button"
+                onClick={enviar}
+                disabled={!mesaSel || carrito.length === 0 || enviando}
+                className="mt-3 w-full rounded-xl bg-amber-400 py-3 text-sm font-bold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                🧾 Agregar a la cuenta
+                {enviando ? 'Enviando…' : 'Enviar a cocina'}
               </button>
-              <button
-                onClick={() => enviarAMesa(true)}
-                disabled={!mesaId || carrito.length === 0 || enviar.isPending}
-                className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white font-bold py-3 rounded-lg transition-colors"
-              >
-                {enviar.isPending ? 'Enviando...' : '🚀 Enviar directo a cocina'}
-              </button>
+              {!mesaSel && carrito.length > 0 && (
+                <p className="mt-2 text-center text-xs text-slate-500">Elige la mesa para poder enviar la comanda.</p>
+              )}
             </div>
-            {mesaSeleccionada && mesaSeleccionada.status !== 'AVAILABLE' && (
-              <p className="text-[10px] text-slate-500 mt-2 text-center">
-                {mesaSeleccionada.name} está ocupada: los items se suman a su cuenta abierta.
-              </p>
-            )}
-          </div>
+          </aside>
         </div>
       </div>
+
+      {aviso && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 rounded-xl border px-4 py-3 text-sm font-medium shadow-xl ${
+            aviso.tipo === 'ok'
+              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+              : 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+          }`}
+        >
+          {aviso.texto}
+        </div>
+      )}
     </div>
   );
 }

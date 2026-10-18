@@ -43,6 +43,10 @@ class ItemsIn(BaseModel):
     items: list[OrderItemIn] = Field(min_length=1)
 
 
+class ItemQtyIn(BaseModel):
+    quantity: float = Field(gt=0, le=99)
+
+
 class OrderItemOut(BaseModel):
     id: UUID
     recipe_id: UUID

@@ -21,6 +21,12 @@ async def lifespan(app: FastAPI):
             await conn.execute(text("ALTER TABLE users ADD COLUMN pin_hash TEXT"))
         except Exception:
             pass  # la columna ya existe
+                # Columna notes en order_items (especificaciones de la comanda)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN notes VARCHAR(255)"))
+        except Exception:
+            pass
 
     async with AsyncSessionLocal() as db:
         await bootstrap_demo(db)

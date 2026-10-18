@@ -80,6 +80,20 @@ async def quitar_item(db: AsyncSession, tenant_id: UUID, table_id: UUID, item_id
     return await order_a_out(db, order)
 
 
+async def cambiar_cantidad(db: AsyncSession, tenant_id: UUID, table_id: UUID, item_id: UUID, nueva: float) -> dict:
+    """Cambia la cantidad de un item mientras el pedido no haya ido a cocina."""
+    order = await _activo_obligatorio(db, tenant_id, table_id)
+    if order.status != "CONFIRMED":
+        raise HTTPException(409, "El pedido ya fue enviado a cocina. Agrega un nuevo item en el menú rápido.")
+    item = next((i for i in order.items if i.id == item_id), None)
+    if not item:
+        raise HTTPException(404, "Item no encontrado en el pedido")
+    item.quantity = Decimal(str(nueva))
+    _recalcular(order)
+    await db.commit()
+    return await order_a_out(db, order)
+
+
 async def send_to_kitchen(db: AsyncSession, tenant_id: UUID, order_id: UUID) -> tuple[dict, list[str]]:
     result = await db.execute(
         select(Order).where(Order.id == order_id, Order.tenant_id == tenant_id).options(_LOADER)
