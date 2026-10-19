@@ -1,4 +1,4 @@
-// Kārei · API de mesas: listar, crear, eliminar
+// Kārei · API de mesas: listar, crear, eliminar (ids crudos: string o número)
 import { api, primerArray, textoError } from './http';
 import { campo, capacidadMesa, estadoMesa, nombreMesa, zonaMesa } from './tipos';
 import type { Mesa } from './tipos';
@@ -9,8 +9,9 @@ export interface DatosMesa {
   capacidad: number;
 }
 
+// NUNCA convertir el id a número: el backend puede usar ids de texto.
 const normalizar = (m: any): Mesa => ({
-  id: Number(campo(m, 'id', 'table_id', 'mesa_id', 'id_mesa') ?? 0),
+  id: campo(m, 'id', 'table_id', 'mesa_id', 'id_mesa') ?? campo(m, 'code', 'codigo') ?? '',
   nombre: nombreMesa(m),
   zona: zonaMesa(m),
   capacidad: capacidadMesa(m),
@@ -35,12 +36,12 @@ export const traerMesas = async (): Promise<Mesa[]> => {
     try {
       const r = await api.get(ruta);
       const mesas = extraer(r?.data);
-      // La ruta existe y respondió: es la verdad definitiva (aunque vacía).
-      if (mesas) return mesas;
+      // Ruta viva: respuesta definitiva (aunque venga vacía).
+      if (mesas) return mesas.filter((m: Mesa) => m.id !== '');
       ultimo = `${ruta}: respuesta sin lista ${JSON.stringify(r?.data)?.slice(0, 80)}`;
     } catch (e: any) {
       ultimo = `${ruta}: ${textoError(e)}`;
-      if (e?.response?.status !== 404) break; // 404 = probar la siguiente ruta
+      if (e?.response?.status !== 404) break; // 404 = probar la siguiente
     }
   }
   throw new Error(ultimo || 'No se pudieron cargar las mesas');
@@ -58,8 +59,7 @@ export const crearMesa = async (d: DatosMesa): Promise<Mesa> => {
     for (const ruta of ['/pos/tables', '/tables']) {
       try {
         const r = await api.post(ruta, cuerpo);
-        const id = Number(campo(r?.data, 'id', 'table_id') ?? 0);
-        return normalizar(id > 0 ? r.data : { ...cuerpo, id });
+        return normalizar({ ...cuerpo, ...(r?.data ?? {}) });
       } catch (e: any) {
         ultimo = textoError(e);
       }
@@ -68,7 +68,7 @@ export const crearMesa = async (d: DatosMesa): Promise<Mesa> => {
   throw new Error(ultimo || 'El backend rechazó la mesa');
 };
 
-export const eliminarMesa = async (id: number): Promise<void> => {
+export const eliminarMesa = async (id: Id): Promise<void> => {
   for (const ruta of [`/pos/tables/${id}`, `/tables/${id}`, `/pos/mesas/${id}`]) {
     try { await api.delete(ruta); return; } catch { /* prueba la siguiente */ }
   }
@@ -81,10 +81,17 @@ const DEMO: DatosMesa[] = [
   { nombre: 'Terraza 1', zona: 'Terraza', capacidad: 8 },
 ];
 
-export const crearMesasDemo = async (): Promise<number> => {
-  let ok = 0;
+// Crea solo las que NO existen todavía (por nombre), para no duplicar.
+export const crearMesasDemo = async (): Promise<{ creadas: number; omitidas: number }> => {
+  const nombres = new Set<string>();
+  try {
+    (await traerMesas()).forEach((m) => nombres.add(m.nombre.trim().toLowerCase()));
+  } catch { /* si no puedo listar, intento crear igual */ }
+  let creadas = 0;
+  let omitidas = 0;
   for (const d of DEMO) {
-    try { await crearMesa(d); ok++; } catch { /* continúa con la siguiente */ }
+    if (nombres.has(d.nombre.trim().toLowerCase())) { omitidas++; continue; }
+    try { await crearMesa(d); creadas++; } catch { /* continúa */ }
   }
-  return ok;
+  return { creadas, omitidas };
 };
