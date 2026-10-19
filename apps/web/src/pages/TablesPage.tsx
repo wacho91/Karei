@@ -45,7 +45,8 @@ export default function TablesPage() {
             {pos.cuenta && (
               <PanelCuenta cuenta={pos.cuenta} onSumar={pos.sumarItem} onRestar={pos.restarItem} onCobrar={() => setPago(true)} />
             )}
-            <MenuRapido recetas={pos.recetas} borrador={pos.borrador} onAgregar={pos.alBorrador} />
+            <MenuRapido recetas={pos.recetas} borrador={pos.borrador} onAgregar={pos.alBorrador}
+              error={pos.errorMenu} onRecargar={pos.recargar} />
           </aside>
         </div>
       </div>
