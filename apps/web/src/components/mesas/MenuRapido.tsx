@@ -14,8 +14,9 @@ interface Props {
 export default function MenuRapido({ recetas, borrador, onAgregar, error, onRecargar }: Props) {
   const [q, setQ] = useState('');
 
+  // ids pueden ser texto: clave any
   const cantidadDe = useMemo(() => {
-    const m = new Map<number, number>();
+    const m = new Map<any, number>();
     borrador.forEach((b) => m.set(b.recipe_id, (m.get(b.recipe_id) ?? 0) + b.cantidad));
     return m;
   }, [borrador]);
@@ -52,7 +53,7 @@ export default function MenuRapido({ recetas, borrador, onAgregar, error, onReca
         {lista.map((r) => {
           const n = cantidadDe.get(r.id) ?? 0;
           return (
-            <button key={r.id} onClick={() => onAgregar(r)}
+            <button key={String(r.id)} onClick={() => onAgregar(r)}
               className="relative rounded-lg border border-zinc-800 bg-zinc-950 hover:border-amber-500/60 px-3 py-2 text-left">
               {n > 0 && (
                 <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-[11px] font-bold flex items-center justify-center">{n}</span>
