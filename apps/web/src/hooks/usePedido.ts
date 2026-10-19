@@ -1,37 +1,32 @@
-// Kārei · hook del pedido: mesa elegida, borrador, cuenta y cobro
+// Kārei · hook del pedido: mesa elegida, borrador, cuenta y cobro (ids crudos)
 import { useEffect, useState } from 'react';
 import { traerCuenta } from '../lib/cuentaApi';
 import { enviarComanda, sumarItemCuenta, restarItemCuenta } from '../lib/comandaApi';
 import { cobrarCuenta } from '../lib/pagoApi';
 import { traerRecetas } from '../lib/recetasApi';
-import type { Cuenta, LineaBorrador, LineaCuenta, Receta } from '../lib/tipos';
+import type { Cuenta, Id, LineaBorrador, LineaCuenta, Receta } from '../lib/tipos';
 import { alertaAviso, alertaError, toastOk } from '../lib/alertas';
 
 export function usePedido(
   recargarMesas: () => Promise<void>,
-  marcarOcupada: (id: number) => void,
-  desmarcar: (id: number) => void,
+  marcarOcupada: (id: Id) => void,
+  desmarcar: (id: Id) => void,
 ) {
-  const [mesaId, setMesaId] = useState<number | null>(null);
+  const [mesaId, setMesaId] = useState<Id | null>(null);
   const [cuenta, setCuenta] = useState<Cuenta | null>(null);
   const [borrador, setBorrador] = useState<LineaBorrador[]>([]);
   const [recetas, setRecetas] = useState<Receta[]>([]);
   const [errorMenu, setErrorMenu] = useState('');
 
   async function cargarRecetas(forzar = false) {
-    try {
-      setRecetas(await traerRecetas(forzar));
-      setErrorMenu('');
-    } catch (e: any) {
-      setErrorMenu(e?.message ?? 'No se pudo cargar el menú');
-    }
+    try { setRecetas(await traerRecetas(forzar)); setErrorMenu(''); }
+    catch (e: any) { setErrorMenu(e?.message ?? 'No se pudo cargar el menú'); }
   }
-
   useEffect(() => { cargarRecetas(); }, []);
 
-  async function seleccionar(id: number | null) {
+  async function seleccionar(id: Id | null) {
+    if (id === null || id === '') return;
     setMesaId(id); setCuenta(null); setBorrador([]);
-    if (!id) return;
     try {
       const c = await traerCuenta(id);
       setCuenta(c);
@@ -60,11 +55,10 @@ export function usePedido(
   function notaDe(clave: string, notes: string) {
     setBorrador((b) => b.map((x) => (x.clave === clave ? { ...x, notes } : x)));
   }
-
   const limpiar = () => setBorrador([]);
 
   async function enviar() {
-    if (!mesaId || !borrador.length) return;
+    if (mesaId === null || mesaId === '' || !borrador.length) return;
     const enviados = borrador;
     try {
       const id = await enviarComanda(mesaId, cuenta?.orderId ?? null, enviados);
@@ -87,7 +81,7 @@ export function usePedido(
     }
   }
 
-  async function refrescar(id: number) {
+  async function refrescar(id: Id) {
     try { setCuenta(await traerCuenta(id)); } catch { /* conserva estado local */ }
   }
 
