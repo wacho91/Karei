@@ -16,8 +16,18 @@ export function usePedido(
   const [cuenta, setCuenta] = useState<Cuenta | null>(null);
   const [borrador, setBorrador] = useState<LineaBorrador[]>([]);
   const [recetas, setRecetas] = useState<Receta[]>([]);
+  const [errorMenu, setErrorMenu] = useState('');
 
-  useEffect(() => { traerRecetas().then(setRecetas).catch(() => setRecetas([])); }, []);
+  async function cargarRecetas(forzar = false) {
+    try {
+      setRecetas(await traerRecetas(forzar));
+      setErrorMenu('');
+    } catch (e: any) {
+      setErrorMenu(e?.message ?? 'No se pudo cargar el menú');
+    }
+  }
+
+  useEffect(() => { cargarRecetas(); }, []);
 
   async function seleccionar(id: number | null) {
     setMesaId(id); setCuenta(null); setBorrador([]);
@@ -64,7 +74,6 @@ export function usePedido(
       try {
         setCuenta(await traerCuenta(mesaId));
       } catch {
-        // el backend no expone consulta de cuenta: mostramos lo que enviamos
         setCuenta({
           orderId: id, mesaId,
           items: enviados.map((b) => ({ id: 0, recipeId: b.recipe_id, nombre: b.nombre, precio: b.precio, cantidad: b.cantidad, notes: b.notes })),
@@ -118,5 +127,5 @@ export function usePedido(
     }
   }
 
-  return { mesaId, cuenta, borrador, recetas, seleccionar, alBorrador, ajustar, notaDe, limpiar, enviar, sumarItem, restarItem, cobrar };
+  return { mesaId, cuenta, borrador, recetas, errorMenu, recargar: cargarRecetas, seleccionar, alBorrador, ajustar, notaDe, limpiar, enviar, sumarItem, restarItem, cobrar };
 }

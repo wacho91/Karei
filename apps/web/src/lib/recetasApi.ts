@@ -1,11 +1,13 @@
-// Kārei · menú de recetas con rutas candidatas y caché en memoria
+// Kārei · menú de recetas: rutas candidatas + caché solo con datos
 import { api, primerArray, textoError } from './http';
 import { campo, num } from './tipos';
 import type { Receta } from './tipos';
 
 const RUTAS = [
-  '/recetas', '/recipes', '/pos/menu', '/menu', '/pos/recetas',
-  '/products', '/productos', '/pos/products', '/dishes', '/platos',
+  '/recetas', '/recipes', '/pos/recetas', '/pos/recipes',
+  '/pos/menu', '/menu', '/products', '/productos',
+  '/pos/products', '/dishes', '/platos', '/pos/dishes',
+  '/carta', '/catalogo',
 ];
 
 const normalizar = (r: any): Receta => ({
@@ -22,14 +24,18 @@ export const traerRecetas = async (forzar = false): Promise<Receta[]> => {
   for (const ruta of RUTAS) {
     try {
       const r = await api.get(ruta);
-      const lista = primerArray(r?.data).map(normalizar).filter((x: Receta) => x.id > 0);
-      if (lista.length) {
-        cache = lista;
-        return cache;
+      const d = r?.data;
+      // Ruta viva: respuesta definitiva (aunque venga vacía).
+      const esLista = Array.isArray(d) || Array.isArray(d?.items) || primerArray(d).length > 0;
+      if (esLista) {
+        const lista = primerArray(d).map(normalizar);
+        cache = lista.length ? lista : null; // no cacheamos vacíos
+        return lista;
       }
-      ultimo = `${ruta}: sin ítems`;
+      ultimo = `${ruta}: formato raro ${JSON.stringify(d)?.slice(0, 60)}`;
     } catch (e: any) {
       ultimo = `${ruta}: ${textoError(e)}`;
+      if (e?.response?.status !== 404) break; // 404 = siguiente candidata
     }
   }
   throw new Error(ultimo || 'No se pudo cargar el menú');
