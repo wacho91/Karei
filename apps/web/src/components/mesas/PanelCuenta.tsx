@@ -1,73 +1,57 @@
-// Cuenta abierta de la mesa: ítems con −/+, especificaciones y botón de cobro
-import { fmt, precioItem, cantidadItem } from '../../lib/tipos';
+// Kārei · panel de la cuenta abierta de la mesa seleccionada
+import { fmt } from '../../lib/tipos';
+import type { Cuenta, LineaCuenta } from '../../lib/tipos';
 
 interface Props {
-  nombreMesaTxt: string;
-  orderId: number;
-  items: any[];
-  total: number;
-  cargando: boolean;
-  procesando: boolean;
-  onSumar: (item: any) => void;
-  onRestar: (item: any) => void;
+  cuenta: Cuenta;
+  onSumar: (item: LineaCuenta) => void;
+  onRestar: (item: LineaCuenta) => void;
   onCobrar: () => void;
 }
 
-export default function PanelCuenta(props: Props) {
-  const { nombreMesaTxt, orderId, items, total, cargando, procesando, onSumar, onRestar, onCobrar } = props;
+export default function PanelCuenta({ cuenta, onSumar, onRestar, onCobrar }: Props) {
+  const conNotas = cuenta.items.filter((i) => i.notes);
 
   return (
-    <aside className="flex flex-col gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-      <header>
-        <h2 className="text-lg font-bold text-zinc-100">Cuenta en curso</h2>
-        <p className="text-xs text-zinc-500">{nombreMesaTxt} · orden #{orderId}</p>
-      </header>
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold">Cuenta actual</h2>
+        {/* Guard anti-NaN: si no hay id real, no mostramos número */}
+        <span className="text-xs text-zinc-500">
+          {cuenta.orderId ? `Pedido #${cuenta.orderId}` : 'Cuenta abierta'}
+        </span>
+      </div>
 
-      {cargando && <p className="text-sm text-zinc-500">Buscando la cuenta…</p>}
+      <div className="space-y-2">
+        {cuenta.items.map((i, idx) => (
+          <div key={i.id || idx} className="flex items-center gap-2 rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm truncate">{i.nombre}</p>
+              <p className="text-xs text-zinc-500">{fmt(i.precio)} × {i.cantidad}</p>
+            </div>
+            <button onClick={() => onRestar(i)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">−</button>
+            <span className="w-6 text-center text-sm">{i.cantidad}</span>
+            <button onClick={() => onSumar(i)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">+</button>
+          </div>
+        ))}
+      </div>
 
-      {!cargando && items.length === 0 && (
-        <p className="text-sm text-zinc-500">La cuenta está vacía. Agrega productos desde el menú rápido.</p>
+      {conNotas.length > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+          <p className="font-semibold mb-1">Especificaciones</p>
+          {conNotas.map((i) => (<p key={i.id || i.nombre}>· {i.nombre}: {i.notes}</p>))}
+        </div>
       )}
 
-      <ul className="flex flex-col gap-2">
-        {items.map((it, i) => {
-          const cant = cantidadItem(it);
-          const notas = it?.notes ?? it?.nota ?? null;
-          return (
-            <li key={it?.id ?? i} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-zinc-200">
-                  {cant}× {it?.name ?? it?.nombre ?? it?.recipe_name ?? 'Ítem'}
-                </span>
-                <span className="text-sm font-semibold text-amber-400">{fmt(precioItem(it) * cant)}</span>
-              </div>
-              {notas && (
-                <p className="mt-1 rounded-lg bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
-                  Especificación: {notas}
-                </p>
-              )}
-              <div className="mt-2 flex items-center gap-2">
-                <button disabled={procesando} onClick={() => onRestar(it)}
-                  className="h-7 w-7 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-40">−</button>
-                <span className="w-6 text-center text-sm text-zinc-200">{cant}</span>
-                <button disabled={procesando} onClick={() => onSumar(it)}
-                  className="h-7 w-7 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-40">+</button>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3">
+        <span className="text-sm text-zinc-400">Total</span>
+        <span className="text-lg font-bold text-amber-400">{fmt(cuenta.total)}</span>
+      </div>
 
-      <footer className="mt-auto border-t border-zinc-800 pt-3">
-        <div className="mb-3 flex items-center justify-between text-sm">
-          <span className="text-zinc-400">Total</span>
-          <span className="text-lg font-bold text-zinc-100">{fmt(total)}</span>
-        </div>
-        <button disabled={procesando || items.length === 0} onClick={onCobrar}
-          className="w-full rounded-xl bg-emerald-500 py-2.5 text-sm font-bold text-zinc-950 hover:bg-emerald-400 disabled:opacity-40">
-          Cobrar cuenta
-        </button>
-      </footer>
-    </aside>
+      <button onClick={onCobrar}
+        className="mt-4 w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 py-2.5 font-semibold text-white">
+        Cobrar cuenta
+      </button>
+    </div>
   );
 }
