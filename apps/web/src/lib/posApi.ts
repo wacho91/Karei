@@ -1,6 +1,6 @@
 // Toda la comunicación con el backend POS.
-// Las rutas se prueban en orden y la ganadora queda en caché para no repetir 404.
-import * as apiModule from '../api';
+// Las rutas se prueban en orden y la ganadora queda en caché.
+import * as apiModule from './api';
 import axiosLib from 'axios';
 import type { Mesa, Cuenta, LineaComanda } from './tipos';
 
@@ -10,14 +10,25 @@ const api: any =
   (apiModule as any).axios ??
   axiosLib.create({ baseURL: '/api/v1' });
 
-// ─── Utilidades ───
+// ─── Utilidades de extracción ───
 export function extraerLista(x: any): any[] {
   if (Array.isArray(x)) return x;
   const d = x?.data ?? x;
   if (Array.isArray(d)) return d;
   if (Array.isArray(d?.data)) return d.data;
-  for (const k of ['items', 'mesas', 'tables', 'results', 'orders', 'recipes', 'productos']) {
+  for (const k of ['items', 'mesas', 'tables', 'results', 'orders', 'recipes', 'productos', 'rows', 'list']) {
     if (Array.isArray(d?.[k])) return d[k];
+  }
+  return [];
+}
+
+/** Busca el primer array de objetos en la respuesta, a cualquier profundidad razonable. */
+function primerArray(x: any, profundidad = 4): any[] {
+  if (Array.isArray(x)) return x.filter(e => e && typeof e === 'object');
+  if (!x || typeof x !== 'object' || profundidad === 0) return [];
+  for (const v of Object.values(x)) {
+    const r = primerArray(v, profundidad - 1);
+    if (r.length) return r;
   }
   return [];
 }
@@ -33,7 +44,7 @@ function campo(obj: any, ...claves: string[]): any {
 export function textoError(e: any): string {
   const d = e?.response?.data;
   const detalle = typeof d === 'string' ? d : d?.detail ?? d?.message ?? '';
-  return String(detalle || e?.message || 'sin respuesta del servidor').slice(0, 160);
+  return String(detalle || e?.message || 'sin respuesta del servidor').slice(0, 200);
 }
 
 // ─── Cachés de rutas ganadoras ───
@@ -47,12 +58,13 @@ export async function traerMesas(): Promise<Mesa[]> {
   for (const ruta of rutas) {
     try {
       const r = await api.get(ruta);
-      const lista = extraerLista(r?.data ?? r);
+      const bruta = r?.data ?? r;
+      let lista = extraerLista(bruta);
+      if (!lista.length) lista = primerArray(bruta); // por si la respuesta tiene una forma rara
       if (lista.length) {
         return lista
           .filter((m: any) => m && typeof m === 'object')
-          .map((m: any) => ({ ...m, id: Number(campo(m, 'id', 'table_id', 'mesa_id') ?? 0) }))
-          .filter((m: any) => Number.isFinite(m.id) && m.id > 0);
+          .map((m: any) => ({ ...m, id: campo(m, 'id', 'table_id', 'mesa_id', 'id_mesa') }));
       }
     } catch { /* siguiente ruta */ }
   }
@@ -91,11 +103,13 @@ export async function eliminarMesa(mesaId: number): Promise<void> {
 export async function traerRecetas(): Promise<any[]> {
   const rutas = rutaRecetas
     ? [rutaRecetas]
-    : ['/pos/recipes', '/recipes', '/pos/menu', '/menu', '/pos/products', '/products'];
+    : ['/pos/recipes', '/recipes', '/pos/products', '/products', '/recetas', '/pos/recetas', '/pos/menu', '/menu', '/pos/dishes', '/dishes'];
   for (const ruta of rutas) {
     try {
       const r = await api.get(ruta);
-      const lista = extraerLista(r?.data ?? r);
+      const bruta = r?.data ?? r;
+      let lista = extraerLista(bruta);
+      if (!lista.length) lista = primerArray(bruta);
       if (lista.length) { rutaRecetas = ruta; return lista; }
     } catch { /* siguiente ruta */ }
   }
@@ -105,6 +119,7 @@ export async function traerRecetas(): Promise<any[]> {
 // ─── Cuenta abierta de una mesa ───
 const PLANTILLAS_CUENTA = [
   '/pos/tables/{id}/account',
+  '/pos/tables/{id}/orders',
   '/pos/tables/{id}/order',
   '/pos/tables/{id}/current-order',
   '/pos/orders?table_id={id}',
@@ -125,13 +140,16 @@ export async function traerCuenta(mesaId: number): Promise<Cuenta | null> {
       if (Array.isArray(orden)) orden = orden[0];
       if (!orden || typeof orden !== 'object') continue;
 
-      const items = extraerLista(orden.items ?? orden.order_items ?? orden.lines ?? orden.detail ?? []);
-      const orderId = Number(campo(orden, 'id', 'order_id', 'orderId') ?? 0);
+      const brutoItems = orden.items ?? orden.order_items ?? orden.lines ?? orden.detail ?? null;
+      let items = extraerLista(brutoItems);
+      if (!items.length) items = primerArray(brutoItems);
+
+      const orderId = campo(orden, 'id', 'order_id', 'orderId');
       if (!orderId && items.length === 0) continue;
 
       plantillaCuenta = plantilla;
       return {
-        orderId: orderId || null,
+        orderId: orderId ? Number(orderId) : null,
         items,
         estado: String(campo(orden, 'status', 'estado') ?? ''),
         total: Number(campo(orden, 'total', 'total_amount', 'amount') ?? 0),
@@ -148,12 +166,21 @@ export interface ResultadoEnvio {
   detalle?: string[];
 }
 
+const alIngles = (items: LineaComanda[]) => items;
+const alEspanol = (items: LineaComanda[]) =>
+  items.map(i => ({ receta_id: i.recipe_id, cantidad: i.quantity, notas: i.notes ?? null }));
+
 const INTENTOS_CREAR: { ruta: string; cuerpo: (mesaId: number, items: LineaComanda[]) => any }[] = [
-  { ruta: '/pos/orders', cuerpo: (m, items) => ({ table_id: m, items }) },
-  { ruta: '/pos/orders', cuerpo: (m, items) => ({ table_id: m, mesa_id: m, items }) },
-  { ruta: '/pos/tables/{id}/orders', cuerpo: (_m, items) => ({ items }) },
-  { ruta: '/pos/tables/{id}/order', cuerpo: (_m, items) => ({ items }) },
-  { ruta: '/pos/tables/{id}/account', cuerpo: (_m, items) => ({ items }) },
+  { ruta: '/pos/tables/{id}/account', cuerpo: (_m, items) => ({ items: alIngles(items) }) },
+  { ruta: '/pos/tables/{id}/account', cuerpo: (_m, items) => ({ items: alEspanol(items) }) },
+  { ruta: '/pos/tables/{id}/orders', cuerpo: (_m, items) => ({ items: alIngles(items) }) },
+  { ruta: '/pos/tables/{id}/orders', cuerpo: (_m, items) => ({ items: alEspanol(items) }) },
+  { ruta: '/pos/tables/{id}/items',  cuerpo: (_m, items) => ({ items: alIngles(items) }) },
+  { ruta: '/pos/tables/{id}/items',  cuerpo: (_m, items) => ({ items: alEspanol(items) }) },
+  { ruta: '/pos/tables/{id}/order',  cuerpo: (_m, items) => ({ items: alIngles(items) }) },
+  { ruta: '/pos/orders', cuerpo: (m, items) => ({ table_id: m, items: alIngles(items) }) },
+  { ruta: '/pos/orders', cuerpo: (m, items) => ({ mesa_id: m, items: alIngles(items) }) },
+  { ruta: '/pos/orders/create', cuerpo: (m, items) => ({ table_id: m, items: alIngles(items) }) },
 ];
 
 export async function enviarComanda(
@@ -164,12 +191,18 @@ export async function enviarComanda(
   // Caso 1: la mesa ya tiene cuenta abierta → agregamos los ítems nuevos
   if (orderIdAbierta) {
     const fallos: string[] = [];
-    for (const ruta of [`/pos/orders/${orderIdAbierta}/items`, `/pos/orders/${orderIdAbierta}/add-items`]) {
+    const intentosAgregar = [
+      { ruta: `/pos/orders/${orderIdAbierta}/items`, cuerpo: { items: alIngles(items) } },
+      { ruta: `/pos/orders/${orderIdAbierta}/items`, cuerpo: { items: alEspanol(items) } },
+      { ruta: `/pos/tables/${mesaId}/items`, cuerpo: { items: alIngles(items) } },
+      { ruta: `/pos/orders/${orderIdAbierta}/add-items`, cuerpo: { items: alIngles(items) } },
+    ];
+    for (const intento of intentosAgregar) {
       try {
-        await api.post(ruta, { items });
+        await api.post(intento.ruta, intento.cuerpo);
         return { ok: true, orderId: orderIdAbierta };
       } catch (e) {
-        fallos.push(`POST ${ruta} → ${textoError(e)}`);
+        fallos.push(`POST ${intento.ruta} → ${textoError(e)}`);
       }
     }
     return { ok: false, detalle: fallos };
@@ -207,12 +240,23 @@ export async function enviarComanda(
 // ─── Sumar / reducir ítems de la cuenta abierta ───
 export async function sumarItemCuenta(orderId: number, item: any): Promise<void> {
   const recipeId = Number(
-    campo(item, 'recipe_id', 'recipeId') ?? campo(item?.recipe ?? {}, 'id') ?? 0,
+    campo(item, 'recipe_id', 'recipeId', 'receta_id') ?? campo(item?.recipe ?? {}, 'id') ?? 0,
   );
   if (!recipeId) throw new Error('Este ítem no tiene receta asociada. Agrégalo desde el menú rápido.');
-  await api.post(`/pos/orders/${orderId}/items`, {
-    items: [{ recipe_id: recipeId, quantity: 1, notes: item?.notes ?? null }],
-  });
+  const intentos = [
+    { recipe_id: recipeId, quantity: 1, notes: item?.notes ?? null },
+    { receta_id: recipeId, cantidad: 1, notas: item?.notes ?? null },
+  ];
+  let ultimo = '';
+  for (const cuerpo of intentos) {
+    try {
+      await api.post(`/pos/orders/${orderId}/items`, { items: [cuerpo] });
+      return;
+    } catch (e) {
+      ultimo = textoError(e);
+    }
+  }
+  throw new Error(ultimo || 'El backend rechazó sumar el ítem.');
 }
 
 export async function restarItemCuenta(orderId: number, item: any): Promise<void> {
@@ -242,9 +286,23 @@ export async function cobrarCuenta(orderId: number, propinaPct: number, metodo: 
   throw new Error('Ninguna ruta de cobro respondió (checkout / close / pay).');
 }
 
-// ─── Diagnóstico de rutas (el botón «Diagnóstico») ───
-export async function diagnosticoPos(mesaId?: number | null): Promise<string[]> {
+// ─── Diagnóstico v2: respuestas crudas + pruebas con mesa falsa ───
+async function sondearHooks(): Promise<string> {
+  const candidatos = ['../hooks/usePos', '../hooks/usePosHooks', '../hooks/pos', '../hooks/usePos.ts', '../hooks/usePos.tsx', '../hooks/usePos.jsx'];
+  for (const ruta of candidatos) {
+    try {
+      const mod: any = await import(/* @vite-ignore */ ruta);
+      const nombres = Object.keys(mod).filter(k => typeof mod[k] === 'function');
+      if (nombres.length) return `${ruta} → exporta: ${nombres.join(', ')}`;
+    } catch { /* siguiente candidato */ }
+  }
+  return 'no encontré archivo de hooks (no pasa nada, usamos rutas directas)';
+}
+
+export async function diagnosticoPos(_mesaId?: number | null): Promise<string[]> {
   const lineas: string[] = [];
+  const FALSA = 99999999; // mesa que no existe: sirve para probar rutas SIN crear nada
+
   const probar = async (metodo: 'get' | 'post', url: string, cuerpo?: any): Promise<string> => {
     try {
       await (metodo === 'get' ? api.get(url) : api.post(url, cuerpo));
@@ -254,22 +312,40 @@ export async function diagnosticoPos(mesaId?: number | null): Promise<string[]> 
     }
   };
 
-  lineas.push(`GET /pos/tables → ${await probar('get', '/pos/tables')}`);
-  lineas.push(`GET /recipes → ${await probar('get', '/recipes')}`);
-  lineas.push(`GET /pos/recipes → ${await probar('get', '/pos/recipes')}`);
-  lineas.push(`GET /kitchen → ${await probar('get', '/kitchen')}`);
-  lineas.push(`GET /pos/kitchen → ${await probar('get', '/pos/kitchen')}`);
-  lineas.push(`GET /pos/orders → ${await probar('get', '/pos/orders')}`);
-
-  const mesas = await traerMesas();
-  lineas.push(`Mesas cargadas: ${mesas.length}`);
-  if (mesas[0]) lineas.push(`Primera mesa (cruda): ${JSON.stringify(mesas[0]).slice(0, 220)}`);
-
-  if (mesaId) {
-    lineas.push(`GET /pos/tables/${mesaId}/account → ${await probar('get', `/pos/tables/${mesaId}/account`)}`);
-    lineas.push(`GET /pos/orders?table_id=${mesaId} → ${await probar('get', `/pos/orders?table_id=${mesaId}`)}`);
+  // 1) Mesas: respuesta CRUDA (revela la forma exacta y los nombres de campo)
+  try {
+    const r = await api.get('/pos/tables');
+    const bruto = r?.data ?? r;
+    const texto = typeof bruto === 'string' ? bruto : JSON.stringify(bruto);
+    lineas.push(`[MESAS] GET /pos/tables → 200 · cruda: ${texto.slice(0, 360)}`);
+  } catch (e: any) {
+    lineas.push(`[MESAS] GET /pos/tables → ${textoError(e)}`);
   }
-  // Prueba segura de creación: usa una mesa inexistente, así no crea nada.
-  lineas.push(`POST /pos/orders (mesa falsa) → ${await probar('post', '/pos/orders', { table_id: 99999999, items: [] })}`);
+  const mesas = await traerMesas();
+  lineas.push(`[MESAS] extraídas por mi código: ${mesas.length}`);
+  if (mesas[0]) lineas.push(`[MESAS] primera con id: ${JSON.stringify(mesas[0]).slice(0, 220)}`);
+
+  // 2) Dónde se crea una orden (mesa falsa → no se crea nada; si NO dice "404 Not Found", la ruta existe)
+  lineas.push(`[CREAR] POST /pos/tables/${FALSA}/account → ${await probar('post', `/pos/tables/${FALSA}/account`, { items: [] })}`);
+  lineas.push(`[CREAR] POST /pos/tables/${FALSA}/orders → ${await probar('post', `/pos/tables/${FALSA}/orders`, { items: [] })}`);
+  lineas.push(`[CREAR] POST /pos/tables/${FALSA}/order → ${await probar('post', `/pos/tables/${FALSA}/order`, { items: [] })}`);
+  lineas.push(`[CREAR] POST /pos/tables/${FALSA}/items → ${await probar('post', `/pos/tables/${FALSA}/items`, { items: [] })}`);
+  lineas.push(`[CREAR] POST /pos/orders → ${await probar('post', '/pos/orders', { table_id: FALSA, items: [] })}`);
+
+  // 3) Cómo se lee la cuenta y cómo se agregan ítems
+  lineas.push(`[CUENTA] GET /pos/tables/${FALSA}/account → ${await probar('get', `/pos/tables/${FALSA}/account`)}`);
+  lineas.push(`[CUENTA] GET /pos/orders?table_id=${FALSA} → ${await probar('get', `/pos/orders?table_id=${FALSA}`)}`);
+  lineas.push(`[CUENTA] POST /pos/orders/${FALSA}/items → ${await probar('post', `/pos/orders/${FALSA}/items`, { items: [] })}`);
+
+  // 4) Cocina y menú
+  lineas.push(`[COCINA] GET /pos/kitchen/orders → ${await probar('get', '/pos/kitchen/orders')}`);
+  lineas.push(`[COCINA] GET /kitchen/orders → ${await probar('get', '/kitchen/orders')}`);
+  lineas.push(`[COCINA] GET /pos/cocina → ${await probar('get', '/pos/cocina')}`);
+  lineas.push(`[MENU] GET /pos/products → ${await probar('get', '/pos/products')}`);
+  lineas.push(`[MENU] GET /products → ${await probar('get', '/products')}`);
+  lineas.push(`[MENU] GET /recetas → ${await probar('get', '/recetas')}`);
+
+  // 5) Hooks del frontend (si existen, sé qué funciones exporta tu usePos)
+  lineas.push(`[HOOKS] ${await sondearHooks()}`);
   return lineas;
 }
