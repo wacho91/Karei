@@ -1,11 +1,12 @@
-// Kārei · enviar comanda y modificar ítems de la cuenta
+// Kārei · enviar comanda y modificar ítems de la cuenta (ids crudos)
 import { api, textoError } from './http';
-import type { LineaBorrador } from './tipos';
+import { campo } from './tipos';
+import type { Id, LineaBorrador } from './tipos';
 
 const alIngles = (l: LineaBorrador) => ({ recipe_id: l.recipe_id, quantity: l.cantidad, notes: l.notes });
 const alEspanol = (l: LineaBorrador) => ({ receta_id: l.recipe_id, cantidad: l.cantidad, notas: l.notes });
 
-const crearPedido = async (mesaId: number, items: LineaBorrador[]): Promise<number | null> => {
+const crearPedido = async (mesaId: Id, items: LineaBorrador[]): Promise<Id | null> => {
   const rutas: Array<[string, any]> = [
     [`/pos/tables/${mesaId}/orders`, {}],
     [`/pos/tables/${mesaId}/order`, {}],
@@ -19,8 +20,8 @@ const crearPedido = async (mesaId: number, items: LineaBorrador[]): Promise<numb
       try {
         const r = await api.post(ruta, { ...extra, items: items.map(fmt) });
         const d = r?.data ?? {};
-        const id = Number(d.id ?? d.order_id ?? d.orderId ?? 0);
-        return id > 0 ? id : null; // creó el pedido aunque no devuelva id
+        const id = campo(d, 'id', 'order_id', 'orderId');
+        return id !== undefined && id !== null && id !== '' ? id : null; // creó aunque sin id
       } catch (e: any) {
         ultimo = textoError(e);
       }
@@ -29,7 +30,7 @@ const crearPedido = async (mesaId: number, items: LineaBorrador[]): Promise<numb
   throw new Error(ultimo || 'Ninguna ruta de pedidos respondió');
 };
 
-const agregar = async (orderId: number, items: LineaBorrador[]): Promise<void> => {
+const agregar = async (orderId: Id, items: LineaBorrador[]): Promise<void> => {
   const rutas = [`/pos/orders/${orderId}/items`, `/pos/orders/${orderId}/add-items`, `/pos/orders/${orderId}/lines`];
   let ultimo = '';
   for (const ruta of rutas) {
@@ -42,10 +43,10 @@ const agregar = async (orderId: number, items: LineaBorrador[]): Promise<void> =
 };
 
 export const enviarComanda = async (
-  mesaId: number,
-  orderId: number | null,
+  mesaId: Id,
+  orderId: Id | null,
   items: LineaBorrador[],
-): Promise<number | null> => {
+): Promise<Id | null> => {
   if (!items.length) throw new Error('La comanda está vacía');
   if (orderId) {
     await agregar(orderId, items);
@@ -54,7 +55,7 @@ export const enviarComanda = async (
   return crearPedido(mesaId, items);
 };
 
-export const sumarItemCuenta = async (orderId: number, recipeId: number, notes = ''): Promise<void> => {
+export const sumarItemCuenta = async (orderId: Id, recipeId: Id, notes = ''): Promise<void> => {
   const cuerpos = [
     { recipe_id: recipeId, quantity: 1, notes },
     { receta_id: recipeId, cantidad: 1, notas: notes },
@@ -68,7 +69,7 @@ export const sumarItemCuenta = async (orderId: number, recipeId: number, notes =
   throw new Error(ultimo || 'No se pudo sumar el ítem');
 };
 
-export const restarItemCuenta = async (orderId: number, itemId: number): Promise<void> => {
+export const restarItemCuenta = async (orderId: Id, itemId: Id): Promise<void> => {
   const rutas = [`/pos/orders/${orderId}/items/${itemId}`, `/pos/order-items/${itemId}`];
   let ultimo = '';
   for (const ruta of rutas) {
