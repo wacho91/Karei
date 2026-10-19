@@ -17,23 +17,36 @@ const normalizar = (m: any): Mesa => ({
   estado: estadoMesa(m),
 });
 
+// null = "esta respuesta no trae lista de mesas"
+const extraer = (data: any): Mesa[] | null => {
+  if (Array.isArray(data)) return data.map(normalizar);
+  if (Array.isArray(data?.items) || Array.isArray(data?.mesas) || Array.isArray(data?.tables)) {
+    return (data.items ?? data.mesas ?? data.tables).map(normalizar);
+  }
+  const anidado = primerArray(data);
+  return anidado.length ? anidado.map(normalizar) : null;
+};
+
+const RUTAS = ['/pos/tables', '/tables', '/pos/mesas'];
+
 export const traerMesas = async (): Promise<Mesa[]> => {
   let ultimo = '';
-  for (const ruta of ['/pos/tables', '/tables', '/pos/mesas']) {
+  for (const ruta of RUTAS) {
     try {
       const r = await api.get(ruta);
-      const mesas = primerArray(r?.data).map(normalizar).filter((x: Mesa) => x.id > 0);
-      if (mesas.length) return mesas;
-      ultimo = `${ruta}: respondió sin mesas`;
+      const mesas = extraer(r?.data);
+      // La ruta existe y respondió: es la verdad definitiva (aunque vacía).
+      if (mesas) return mesas;
+      ultimo = `${ruta}: respuesta sin lista ${JSON.stringify(r?.data)?.slice(0, 80)}`;
     } catch (e: any) {
       ultimo = `${ruta}: ${textoError(e)}`;
+      if (e?.response?.status !== 404) break; // 404 = probar la siguiente ruta
     }
   }
   throw new Error(ultimo || 'No se pudieron cargar las mesas');
 };
 
-// El backend exige  code  y  name  (error 422 confirmado en pantalla).
-// Mandamos el cuerpo en inglés + extras ES; si rechaza, probamos solo ES.
+// El backend exige  code  y  name  (422 confirmado). Inglés primero, ES de apoyo.
 const cuerpos = (d: DatosMesa): any[] => [
   { code: d.nombre, name: d.nombre, zone: d.zona, capacity: d.capacidad, zona: d.zona, capacidad: d.capacidad },
   { nombre: d.nombre, zona: d.zona, capacidad: d.capacidad },
