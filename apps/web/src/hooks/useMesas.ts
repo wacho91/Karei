@@ -8,13 +8,14 @@ import { alertaAviso, alertaError, toastOk } from '../lib/alertas';
 export function useMesas() {
   const [mesas, setMesas] = useState<Mesa[]>([]);
   const [cargando, setCargando] = useState(true);
-  const [ocupadas, setOcupadas] = useState<number[]>([]);
+  // ids pueden ser texto o número: any[] evita fricción de tipos
+  const [ocupadas, setOcupadas] = useState<any[]>([]);
 
-  const marcarOcupada = useCallback((id: number) => {
+  const marcarOcupada = useCallback((id: any) => {
     setOcupadas((o) => (o.includes(id) ? o : [...o, id]));
   }, []);
 
-  const desmarcar = useCallback((id: number) => {
+  const desmarcar = useCallback((id: any) => {
     setOcupadas((o) => o.filter((x) => x !== id));
   }, []);
 
@@ -43,15 +44,20 @@ export function useMesas() {
   const crearDemo = useCallback(async () => {
     try {
       const n = await crearMesasDemo();
-      if (n > 0) toastOk(`${n} mesas demo creadas`);
-      else alertaAviso('Nada creado', 'El backend rechazó todas las mesas demo.');
+      if (n.creadas > 0) {
+        toastOk(`${n.creadas} mesas creadas${n.omitidas ? ` · ${n.omitidas} ya existían` : ''}`);
+      } else if (n.omitidas > 0) {
+        alertaAviso('Nada nuevo', 'Las mesas demo ya existen, no dupliqué nada.');
+      } else {
+        alertaAviso('Nada creado', 'El backend rechazó todas las mesas demo.');
+      }
       await cargar();
     } catch (e: any) {
       alertaError('No se pudieron crear las demo', e?.message ?? '');
     }
   }, [cargar]);
 
-  const eliminar = useCallback(async (id: number) => {
+  const eliminar = useCallback(async (id: any) => {
     try {
       await eliminarMesa(id);
       toastOk('Mesa eliminada');
