@@ -1,9 +1,9 @@
-// Kārei · lectura de la cuenta abierta de una mesa
+// Kārei · lectura de la cuenta abierta de una mesa (ids crudos)
 import { api, primerArray, soltar, textoError } from './http';
 import { campo, num, precioItem, cantidadItem } from './tipos';
-import type { Cuenta, LineaCuenta } from './tipos';
+import type { Cuenta, Id, LineaCuenta } from './tipos';
 
-const PLANTILLAS = (id: number): string[] => [
+const PLANTILLAS = (id: Id): string[] => [
   `/pos/tables/${id}/account`,
   `/pos/tables/${id}/orders`,
   `/pos/tables/${id}/order`,
@@ -12,21 +12,21 @@ const PLANTILLAS = (id: number): string[] => [
   `/pos/current-order?table_id=${id}`,
 ];
 
-const idDe = (x: any): number | null => {
-  const n = Number(campo(x, 'orderId', 'order_id', 'id', 'id_orden', 'pedido_id'));
-  return Number.isFinite(n) && n > 0 ? n : null;
+const idDe = (x: any): Id | null => {
+  const v = campo(x, 'orderId', 'order_id', 'id', 'id_orden', 'pedido_id');
+  return v !== undefined && v !== null && v !== '' ? v : null;
 };
 
 const aLinea = (i: any): LineaCuenta => ({
-  id: Number(campo(i, 'id', 'item_id', 'line_id', 'detail_id') ?? 0),
-  recipeId: Number(campo(i, 'recipe_id', 'receta_id', 'recipeId', 'product_id') ?? 0),
+  id: campo(i, 'id', 'item_id', 'line_id', 'detail_id') ?? 0,
+  recipeId: campo(i, 'recipe_id', 'receta_id', 'recipeId', 'product_id') ?? 0,
   nombre: String(campo(i, 'nombre', 'name', 'recipe_name', 'receta', 'title', 'description') ?? 'Ítem'),
   precio: precioItem(i),
   cantidad: cantidadItem(i),
   notes: String(campo(i, 'notes', 'notas', 'note') ?? ''),
 });
 
-export const traerCuenta = async (mesaId: number): Promise<Cuenta> => {
+export const traerCuenta = async (mesaId: Id): Promise<Cuenta> => {
   let ultimo = '';
   for (const ruta of PLANTILLAS(mesaId)) {
     try {
