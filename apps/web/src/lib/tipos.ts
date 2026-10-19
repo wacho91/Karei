@@ -1,7 +1,10 @@
 // Kārei · tipos y helpers defensivos del POS
 
+// El backend puede usar ids numéricos O de texto: nunca convertir.
+export type Id = number | string;
+
 export interface Mesa {
-  id: number;
+  id: Id;
   nombre: string;
   zona: string;
   capacidad: number;
@@ -10,8 +13,8 @@ export interface Mesa {
 }
 
 export interface LineaCuenta {
-  id: number;
-  recipeId: number;
+  id: Id;
+  recipeId: Id;
   nombre: string;
   precio: number;
   cantidad: number;
@@ -20,8 +23,8 @@ export interface LineaCuenta {
 }
 
 export interface Cuenta {
-  orderId: number | null;
-  mesaId: number;
+  orderId: Id | null;
+  mesaId: Id;
   items: LineaCuenta[];
   estado: string;
   total: number;
@@ -29,7 +32,7 @@ export interface Cuenta {
 
 export interface LineaBorrador {
   clave: string;
-  recipe_id: number;
+  recipe_id: Id;
   nombre: string;
   precio: number;
   cantidad: number;
@@ -37,7 +40,7 @@ export interface LineaBorrador {
 }
 
 export interface Receta {
-  id: number;
+  id: Id;
   nombre: string;
   precio: number;
   [k: string]: any;
