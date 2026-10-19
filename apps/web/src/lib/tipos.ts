@@ -1,26 +1,30 @@
-// Tipos y helpers compartidos del módulo de mesas
+// Kārei · tipos y helpers defensivos del POS
 
 export interface Mesa {
   id: number;
-  name?: string;
-  number?: string | number;
-  zone?: string;
-  capacity?: number;
-  status?: string;
-  [clave: string]: any;
+  nombre: string;
+  zona: string;
+  capacidad: number;
+  estado: string;
+  [k: string]: any;
+}
+
+export interface LineaCuenta {
+  id: number;
+  recipeId: number;
+  nombre: string;
+  precio: number;
+  cantidad: number;
+  notes: string;
+  [k: string]: any;
 }
 
 export interface Cuenta {
   orderId: number | null;
-  items: any[];
+  mesaId: number;
+  items: LineaCuenta[];
   estado: string;
   total: number;
-}
-
-export interface LineaComanda {
-  recipe_id: number;
-  quantity: number;
-  notes?: string | null;
 }
 
 export interface LineaBorrador {
@@ -34,31 +38,45 @@ export interface LineaBorrador {
 
 export interface Receta {
   id: number;
-  name?: string;
-  price?: number;
-  [clave: string]: any;
+  nombre: string;
+  precio: number;
+  [k: string]: any;
 }
 
-// ─── Helpers de mesa ───
-export const nombreMesa = (m: Mesa) =>
-  String(m?.name ?? m?.nombre ?? m?.number ?? m?.numero ?? `Mesa ${m?.id ?? ''}`);
+type Obj = Record<string, any>;
 
-export const zonaMesa = (m: Mesa) =>
-  String(m?.zone ?? m?.zona ?? 'Sin zona');
-
-export const capacidadMesa = (m: Mesa) =>
-  Number(m?.capacity ?? m?.capacidad ?? m?.seats ?? m?.pax ?? 4);
-
-export const mesaOcupada = (m: Mesa) => {
-  const e = String(m?.status ?? m?.estado ?? '').toLowerCase();
-  return e.includes('ocup') || e.includes('bus') || e.includes('open') || e.includes('activ');
+/** Lee la primera clave que exista y no esté vacía. */
+export const campo = (o: Obj | null | undefined, ...claves: string[]): any => {
+  if (!o || typeof o !== 'object') return undefined;
+  for (const c of claves) {
+    const v = o[c];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return undefined;
 };
 
-// ─── Dinero e ítems ───
-export const fmt = (n: number) => `$${Number(n || 0).toLocaleString('es-CO')}`;
+/** Number tolerante: si no es finito devuelve `def`. */
+export const num = (v: any, def = 0): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+};
 
-export const precioItem = (it: any) =>
-  Number(it?.price ?? it?.precio ?? it?.unit_price ?? 0);
+export const nombreMesa = (m: Obj): string =>
+  String(campo(m, 'nombre', 'name', 'code', 'codigo') ?? 'Mesa');
 
-export const cantidadItem = (it: any) =>
-  Number(it?.quantity ?? it?.cantidad ?? it?.qty ?? 1);
+export const zonaMesa = (m: Obj): string =>
+  String(campo(m, 'zona', 'zone', 'area', 'sector') ?? 'Salón');
+
+export const capacidadMesa = (m: Obj): number =>
+  num(campo(m, 'capacidad', 'capacity', 'sillas', 'seats'), 4);
+
+export const estadoMesa = (m: Obj): string =>
+  String(campo(m, 'estado', 'status', 'state', 'mesa_status') ?? 'libre').toLowerCase();
+
+export const precioItem = (i: Obj): number =>
+  num(campo(i, 'precio', 'price', 'unit_price', 'precio_unitario', 'amount'));
+
+export const cantidadItem = (i: Obj): number =>
+  num(campo(i, 'cantidad', 'quantity', 'qty', 'cant'), 1);
+
+export const fmt = (n: number): string => '$' + Math.round(n).toLocaleString('es-CO');
