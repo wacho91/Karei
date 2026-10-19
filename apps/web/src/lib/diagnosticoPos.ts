@@ -1,4 +1,5 @@
-// diagnosticoPos.ts v3 — sondea el backend Y muestra su mapa real de rutas
+// diagnosticoPos.ts v3.1 — sondea el backend Y muestra su mapa real de rutas
+// Fix: el export principal se llama diagnosticoPos (así lo importa TablesPage)
 import { api } from './http';
 import { cargarMapaRutas, hayMapa, rutasDe, origenMapa } from './rutas';
 
@@ -18,7 +19,7 @@ function enGrupos(rutas: string[], n: number): string {
   return rutas.slice(0, n).join(', ') + (rutas.length > n ? ` …(+${rutas.length - n})` : '');
 }
 
-export async function ejecutarDiagnostico(): Promise<string[]> {
+export async function diagnosticoPos(): Promise<string[]> {
   const lineas: string[] = [];
   // ── MAPA REAL DEL BACKEND ──────────────────────────────────────────
   await cargarMapaRutas();
@@ -48,4 +49,5 @@ export async function ejecutarDiagnostico(): Promise<string[]> {
   return lineas;
 }
 
-export const diagnosticarPos = ejecutarDiagnostico;   // alias por compatibilidad
+export const ejecutarDiagnostico = diagnosticoPos;   // alias por compatibilidad
+export const diagnosticarPos = diagnosticoPos;      // alias por compatibilidad
