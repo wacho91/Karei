@@ -1,66 +1,53 @@
-// Mesas agrupadas por zona + acciones globales
+// Kārei · mapa de mesas agrupado por zonas
+import type { Mesa } from '../../lib/tipos';
 import MesaCard from './MesaCard';
-import { zonaMesa, type Mesa } from '../../lib/tipos';
 
 interface Props {
   mesas: Mesa[];
-  mesaIdSeleccionada: number | null;
+  ocupadas: number[];
+  mesaId: number | null;
   cargando: boolean;
-  onSeleccionar: (mesa: Mesa) => void;
-  onQuitar: (mesa: Mesa) => void;
-  onNuevaMesa: () => void;
-  onCrearDemo: () => void;
+  onSeleccionar: (id: number) => void;
+  onEliminar: (id: number) => void;
   onDiagnostico: () => void;
+  onDemo: () => void;
+  onNueva: () => void;
 }
 
-export default function MapaMesas(props: Props) {
-  const { mesas, mesaIdSeleccionada, cargando, onSeleccionar, onQuitar, onNuevaMesa, onCrearDemo, onDiagnostico } = props;
+const BOTON = 'rounded-lg border px-3 py-1.5 text-xs font-medium transition';
 
-  const zonas = new Map<string, Mesa[]>();
-  for (const m of mesas ?? []) {
-    const z = zonaMesa(m);
-    if (!zonas.has(z)) zonas.set(z, []);
-    zonas.get(z)!.push(m);
-  }
+export default function MapaMesas(p: Props) {
+  const zonas = [...new Set(p.mesas.map((m) => m.zona || 'Salón'))];
 
   return (
-    <section className="flex-1">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-bold text-zinc-100">POS · Comedor</h1>
-          <p className="text-sm text-zinc-500">Selecciona una mesa para abrir su comanda</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={onDiagnostico} className="rounded-xl border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500">Diagnóstico</button>
-          <button onClick={onCrearDemo} className="rounded-xl border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500">Crear mesas demo</button>
-          <button onClick={onNuevaMesa} className="rounded-xl bg-amber-500 px-3 py-1.5 text-sm font-semibold text-zinc-950 hover:bg-amber-400">+ Nueva mesa</button>
-        </div>
-      </header>
+    <div>
+      <div className="flex flex-wrap items-center gap-2 mb-5">
+        <button onClick={p.onDiagnostico} className={`${BOTON} border-zinc-700 bg-zinc-900 hover:border-zinc-500`}>Diagnóstico</button>
+        <button onClick={p.onDemo} className={`${BOTON} border-zinc-700 bg-zinc-900 hover:border-zinc-500`}>Crear mesas demo</button>
+        <button onClick={p.onNueva} className={`${BOTON} border-amber-500/50 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20`}>+ Nueva mesa</button>
+        {p.cargando && <span className="text-xs text-zinc-500">Cargando mesas…</span>}
+      </div>
 
-      {cargando && <p className="text-sm text-zinc-500">Cargando mesas…</p>}
-
-      {!cargando && mesas.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-zinc-700 p-10 text-center text-sm text-zinc-500">
-          No hay mesas creadas. Usa «Crear mesas demo» o «+ Nueva mesa».
+      {!p.mesas.length && !p.cargando && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-8 text-center text-zinc-400">
+          <p className="text-3xl mb-2">🍽️</p>
+          <p className="font-medium">No hay mesas todavía</p>
+          <p className="text-sm mt-1">Usa «Crear mesas demo» o «+ Nueva mesa» para empezar.</p>
         </div>
       )}
 
-      {[...zonas.entries()].map(([zona, lista]) => (
-        <div key={zona} className="mb-6">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-widest text-zinc-500">{zona}</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {lista.map(m => (
-              <MesaCard
-                key={m.id}
-                mesa={m}
-                seleccionada={m.id === mesaIdSeleccionada}
-                onSeleccionar={onSeleccionar}
-                onQuitar={onQuitar}
-              />
+      {zonas.map((zona) => (
+        <section key={zona} className="mb-6">
+          <h3 className="text-xs font-semibold tracking-widest text-zinc-500 mb-3">{zona.toUpperCase()}</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {p.mesas.filter((m) => (m.zona || 'Salón') === zona).map((m) => (
+              <MesaCard key={m.id} mesa={m} ocupada={p.ocupadas.includes(m.id)}
+                seleccionada={p.mesaId === m.id}
+                onClick={() => p.onSeleccionar(m.id)} onEliminar={() => p.onEliminar(m.id)} />
             ))}
           </div>
-        </div>
+        </section>
       ))}
-    </section>
+    </div>
   );
 }
