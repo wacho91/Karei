@@ -1,72 +1,63 @@
-// Comanda nueva para la mesa: cantidades −/+ y especificaciones por ítem
-import { fmt, type LineaBorrador } from '../../lib/tipos';
+// Kārei · comanda en construcción (aún no enviada a cocina)
+import { fmt } from '../../lib/tipos';
+import type { LineaBorrador } from '../../lib/tipos';
 
 interface Props {
-  nombreMesaTxt: string;
-  lineas: LineaBorrador[];
-  enviando: boolean;
-  onCantidad: (clave: string, delta: number) => void;
-  onNotas: (clave: string, notas: string) => void;
+  mesaNombre: string;
+  items: LineaBorrador[];
+  onAjustar: (clave: string, delta: number) => void;
+  onNota: (clave: string, notas: string) => void;
+  onLimpiar: () => void;
   onEnviar: () => void;
-  onCancelar: () => void;
 }
 
-export default function PanelBorrador(props: Props) {
-  const { nombreMesaTxt, lineas, enviando, onCantidad, onNotas, onEnviar, onCancelar } = props;
-  const unidades = lineas.reduce((s, l) => s + l.cantidad, 0);
-  const total = lineas.reduce((s, l) => s + l.precio * l.cantidad, 0);
+export default function PanelBorrador({ mesaNombre, items, onAjustar, onNota, onLimpiar, onEnviar }: Props) {
+  const total = items.reduce((s, i) => s + i.precio * i.cantidad, 0);
 
   return (
-    <aside className="flex flex-col gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-      <header className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-zinc-100">Nuevo pedido</h2>
-          <p className="text-xs text-zinc-500">{nombreMesaTxt}</p>
-        </div>
-        <button onClick={onCancelar} className="text-xs text-zinc-500 hover:text-zinc-300">Limpiar</button>
-      </header>
+    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold">Nuevo pedido · {mesaNombre}</h2>
+        <button onClick={onLimpiar} className="text-xs text-zinc-400 hover:text-red-400">Limpiar</button>
+      </div>
 
-      {lineas.length === 0 && (
-        <p className="text-sm text-zinc-500">Elige productos del menú rápido para armar la comanda.</p>
+      {!items.length && (
+        <p className="text-sm text-zinc-500 py-4 text-center">
+          Elige ítems del menú rápido para armar la comanda.
+        </p>
       )}
 
-      <ul className="flex flex-col gap-2">
-        {lineas.map(l => (
-          <li key={l.clave} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-zinc-200">{l.nombre}</span>
-              <span className="text-sm font-semibold text-amber-400">{fmt(l.precio * l.cantidad)}</span>
+      <div className="space-y-2">
+        {items.map((i) => (
+          <div key={i.clave} className="rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm truncate">{i.nombre}</p>
+                <p className="text-xs text-zinc-500">{fmt(i.precio)} × {i.cantidad}</p>
+              </div>
+              <button onClick={() => onAjustar(i.clave, -1)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">−</button>
+              <span className="w-6 text-center text-sm">{i.cantidad}</span>
+              <button onClick={() => onAjustar(i.clave, 1)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">+</button>
             </div>
-            <div className="mt-2 flex items-center gap-2">
-              <button onClick={() => onCantidad(l.clave, -1)}
-                className="h-7 w-7 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700">−</button>
-              <span className="w-6 text-center text-sm text-zinc-200">{l.cantidad}</span>
-              <button onClick={() => onCantidad(l.clave, +1)}
-                className="h-7 w-7 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30">+</button>
-            </div>
-            <textarea
-              value={l.notes}
-              onChange={e => onNotas(l.clave, e.target.value)}
-              placeholder="Especificaciones: sin cebolla, término medio…"
-              rows={2}
-              className="mt-2 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-300 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-            />
-          </li>
-        ))}
-      </ul>
-
-      {lineas.length > 0 && (
-        <footer className="mt-auto border-t border-zinc-800 pt-3">
-          <div className="mb-3 flex items-center justify-between text-sm">
-            <span className="text-zinc-400">Por enviar ({unidades})</span>
-            <span className="text-lg font-bold text-zinc-100">{fmt(total)}</span>
+            <input value={i.notes} onChange={(e) => onNota(i.clave, e.target.value)}
+              placeholder="Especificaciones (sin cebolla, término…)"
+              className="mt-2 w-full rounded-md bg-zinc-900 border border-zinc-800 px-2 py-1 text-xs outline-none focus:border-amber-500" />
           </div>
-          <button disabled={enviando} onClick={onEnviar}
-            className="w-full rounded-xl bg-amber-500 py-2.5 text-sm font-bold text-zinc-950 hover:bg-amber-400 disabled:opacity-40">
-            {enviando ? 'Enviando…' : `Enviar a cocina (${unidades})`}
+        ))}
+      </div>
+
+      {items.length > 0 && (
+        <>
+          <div className="mt-3 flex justify-between text-sm border-t border-zinc-800 pt-2">
+            <span className="text-zinc-400">Total</span>
+            <span className="font-bold text-amber-400">{fmt(total)}</span>
+          </div>
+          <button onClick={onEnviar}
+            className="mt-3 w-full rounded-xl bg-amber-500 hover:bg-amber-400 py-2.5 font-semibold text-zinc-950">
+            Enviar a cocina ({items.length})
           </button>
-        </footer>
+        </>
       )}
-    </aside>
+    </div>
   );
 }
