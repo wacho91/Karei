@@ -11,7 +11,7 @@ const RUTAS = [
 ];
 
 const normalizar = (r: any): Receta => ({
-  id: Number(campo(r, 'id', 'recipe_id', 'receta_id', 'product_id', 'producto_id') ?? 0),
+  id: campo(r, 'id', 'recipe_id', 'receta_id', 'product_id', 'producto_id') ?? 0,
   nombre: String(campo(r, 'nombre', 'name', 'titulo', 'title', 'description') ?? 'Ítem'),
   precio: num(campo(r, 'precio', 'price', 'precio_venta', 'sale_price', 'amount')),
 });
