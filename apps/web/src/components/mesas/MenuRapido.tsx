@@ -1,4 +1,4 @@
-// Kārei · menú rápido para armar la comanda, con badge de cantidades
+// Kārei · menú rápido para armar la comanda, con badge y reintento
 import { useMemo, useState } from 'react';
 import { fmt } from '../../lib/tipos';
 import type { LineaBorrador, Receta } from '../../lib/tipos';
@@ -7,9 +7,11 @@ interface Props {
   recetas: Receta[];
   borrador: LineaBorrador[];
   onAgregar: (r: Receta) => void;
+  error?: string;
+  onRecargar?: () => void;
 }
 
-export default function MenuRapido({ recetas, borrador, onAgregar }: Props) {
+export default function MenuRapido({ recetas, borrador, onAgregar, error, onRecargar }: Props) {
   const [q, setQ] = useState('');
 
   const cantidadDe = useMemo(() => {
@@ -31,9 +33,19 @@ export default function MenuRapido({ recetas, borrador, onAgregar }: Props) {
         className="w-full mb-3 rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2 text-sm outline-none focus:border-amber-500" />
 
       {!recetas.length && (
-        <p className="text-sm text-zinc-500 py-3 text-center">
-          Sin menú cargado. Crea recetas en la sección Recetas y vuelve aquí.
-        </p>
+        <div className="text-center py-3">
+          <p className="text-sm text-zinc-500">Sin menú cargado.</p>
+          {error && <p className="text-[11px] text-red-400 mt-1 break-words">{error}</p>}
+          <p className="text-[11px] text-zinc-600 mt-1">
+            Si la base se reinició, vuelve a crear tus recetas en la sección Recetas.
+          </p>
+          {onRecargar && (
+            <button onClick={onRecargar}
+              className="mt-2 text-xs text-amber-400 hover:text-amber-300 underline">
+              Reintentar
+            </button>
+          )}
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
