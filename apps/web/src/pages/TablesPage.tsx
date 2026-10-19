@@ -181,10 +181,14 @@ export default function TablesPage() {
     }
   };
 
-  const crearDemo = async () => {
-    await crearMesasDemo();
-    await cargarMesas();
-    toastOk('Mesas demo listas');
+    const crearDemo = async () => {
+    try {
+      await crearMesasDemo();
+      await cargarMesas();
+      toastOk('Mesas demo listas');
+    } catch {
+      /* el aviso rojo con el error real ya lo mostró posApi */
+    }
   };
 
   const quitarMesa = async (m: Mesa) => {
