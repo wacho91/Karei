@@ -53,15 +53,15 @@ export function alertaError(titulo: string, texto = '') {
   return Swal.fire({ ...tema, icon: 'error', title: titulo, text: texto || undefined });
 }
 
-/** Error con detalle técnico en varias líneas (para diagnóstico de rutas). */
+/** Error con detalle técnico en varias líneas (diagnóstico de rutas). */
 export function alertaErrorTecnico(titulo: string, lineas: string[]) {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return Swal.fire({
     ...tema,
     icon: 'error',
     title: titulo,
-    html: `<div style="text-align:left;font-family:monospace;font-size:12px;line-height:1.8">${lineas.map(esc).join('<br/>')}</div>`,
+    html: `<div style="text-align:left;font-family:monospace;font-size:12px;line-height:1.8;max-height:70vh;overflow-y:auto">${lineas.map(esc).join('<br/>')}</div>`,
     confirmButtonText: 'Entendido',
-    width: 520,
+    width: 560,
   });
 }
