@@ -1,51 +1,51 @@
-// Kārei · diagnóstico: pruebas puntuales + volcado de rutas del openapi
-import axiosLib from 'axios';
-import { api, textoError } from './http';
+// diagnosticoPos.ts v3 — sondea el backend Y muestra su mapa real de rutas
+import { api } from './http';
+import { cargarMapaRutas, hayMapa, rutasDe, origenMapa } from './rutas';
 
-const etiqueta = (r: any): string => `${r?.status ?? '?'} ${r?.statusText ?? ''}`.trim();
-
-const probar = async (metodo: 'get' | 'post', ruta: string, cuerpo?: any): Promise<string> => {
+async function probar(metodo: string, ruta: string, cuerpo?: any): Promise<string> {
   try {
-    const r = await api[metodo](ruta, cuerpo);
-    const d = r?.data;
-    const muestra = typeof d === 'string' ? d.slice(0, 110) : JSON.stringify(d)?.slice(0, 110) ?? '(vacío)';
-    return `OK  ${metodo.toUpperCase().padEnd(4)} ${ruta} → ${etiqueta(r)} · ${muestra}`;
+    const r = await api.request({ method: metodo, url: ruta, data: cuerpo });
+    const muestra = JSON.stringify(r?.data ?? '').slice(0, 110);
+    return `OK   ${metodo} ${ruta} → ${r?.status} · ${muestra}`;
   } catch (e: any) {
-    return `ERR ${metodo.toUpperCase().padEnd(4)} ${ruta} → ${textoError(e).slice(0, 150)}`;
+    const st = e?.response?.status ?? '—';
+    const muestra = JSON.stringify(e?.response?.data ?? '').slice(0, 110);
+    return `ERR  ${metodo} ${ruta} → ${st} · ${muestra}`;
   }
-};
+}
 
-// Descubre TODAS las rutas reales del backend vía openapi.json
-const listarRutas = async (): Promise<string[]> => {
-  const intentos: Array<() => Promise<any>> = [
-    () => api.get('/openapi.json'),
-    () => axiosLib.get('/api/v1/openapi.json', { timeout: 2500 }),
-    () => axiosLib.get('http://127.0.0.1:8000/openapi.json', { timeout: 2500 }),
-    () => axiosLib.get('http://127.0.0.1:8000/api/v1/openapi.json', { timeout: 2500 }),
-    () => axiosLib.get('http://127.0.0.1:5000/openapi.json', { timeout: 2500 }),
-    () => axiosLib.get('http://127.0.0.1:8080/openapi.json', { timeout: 2500 }),
-  ];
-  for (const p of intentos) {
-    try {
-      const r = await p();
-      if (r?.data?.paths) return Object.keys(r.data.paths).sort();
-    } catch { /* siguiente intento */ }
+function enGrupos(rutas: string[], n: number): string {
+  return rutas.slice(0, n).join(', ') + (rutas.length > n ? ` …(+${rutas.length - n})` : '');
+}
+
+export async function ejecutarDiagnostico(): Promise<string[]> {
+  const lineas: string[] = [];
+  // ── MAPA REAL DEL BACKEND ──────────────────────────────────────────
+  await cargarMapaRutas();
+  if (hayMapa()) {
+    const gets = rutasDe('get'), posts = rutasDe('post'), dels = rutasDe('delete');
+    lineas.push(`MAPA openapi (${origenMapa()}): ${gets.length + posts.length + dels.length} rutas`);
+    lineas.push(`GET: ${enGrupos(gets, 14) || '—'}`);
+    lineas.push(`POST: ${enGrupos(posts, 12) || '—'}`);
+    lineas.push(`DELETE: ${enGrupos(dels, 8) || '—'}`);
+  } else {
+    lineas.push('MAPA openapi: NO alcanzable (no se pudo leer el mapa del backend)');
   }
-  return [];
-};
+  // ── MESAS ──────────────────────────────────────────────────────────
+  lineas.push('── MESAS ──');
+  lineas.push(await probar('get', '/pos/tables'));
+  lineas.push(await probar('post', '/pos/tables', {}));
+  // ── PEDIDOS ────────────────────────────────────────────────────────
+  lineas.push('── PEDIDOS ──');
+  lineas.push(await probar('get', '/pos/orders'));
+  lineas.push(await probar('post', '/pos/tables/99999999/orders', {}));
+  lineas.push(await probar('post', '/pos/orders', { table_id: 99999999 }));
+  // ── MENÚ ───────────────────────────────────────────────────────────
+  lineas.push('── MENÚ ──');
+  for (const r of ['/recetas', '/recipes', '/pos/menu', '/menu', '/products', '/carta']) {
+    lineas.push(await probar('get', r));
+  }
+  return lineas;
+}
 
-export const diagnosticoPos = async (): Promise<string> => {
-  const L: string[] = ['KĀREI · DIAGNÓSTICO POS', new Date().toLocaleString('es-CO'), ''];
-
-  L.push('— RUTAS REALES DEL BACKEND —');
-  const rutas = await listarRutas();
-  if (rutas.length) rutas.forEach((x) => L.push(x));
-  else L.push('(openapi no disponible: docs deshabilitado o CORS cerrado)');
-  L.push('');
-
-  L.push('— PRUEBAS PUNTUALES —');
-  L.push(await probar('get', '/pos/tables'));
-  L.push(await probar('get', '/recetas'));
-  L.push(await probar('get', '/recipes'));
-  return L.join('\n');
-};
+export const diagnosticarPos = ejecutarDiagnostico;   // alias por compatibilidad
