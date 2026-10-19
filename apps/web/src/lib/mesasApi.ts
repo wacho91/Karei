@@ -1,7 +1,7 @@
 // Kārei · API de mesas: listar, crear, eliminar (ids crudos: string o número)
 import { api, primerArray, textoError } from './http';
 import { campo, capacidadMesa, estadoMesa, nombreMesa, zonaMesa } from './tipos';
-import type { Mesa } from './tipos';
+import type { Id, Mesa } from './tipos';
 
 export interface DatosMesa {
   nombre: string;
