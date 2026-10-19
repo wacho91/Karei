@@ -1,48 +1,53 @@
-// Tarjeta individual de una mesa en el mapa
+// Kārei · tarjeta de mesa con chip de estado de color
 import type { MouseEvent } from 'react';
+import { estadoMesa, capacidadMesa } from '../../lib/tipos';
+import type { Mesa } from '../../lib/tipos';
 import { confirmar } from '../../lib/alertas';
-import { nombreMesa, zonaMesa, capacidadMesa, mesaOcupada, type Mesa } from '../../lib/tipos';
 
 interface Props {
   mesa: Mesa;
+  ocupada: boolean;
   seleccionada: boolean;
-  onSeleccionar: (mesa: Mesa) => void;
-  onQuitar: (mesa: Mesa) => void;
+  onClick: () => void;
+  onEliminar: () => void;
 }
 
-export default function MesaCard({ mesa, seleccionada, onSeleccionar, onQuitar }: Props) {
-  const ocupada = mesaOcupada(mesa);
+const ETIQUETA: Record<string, string> = {
+  libre: 'Libre', ocupada: 'Ocupada', reservada: 'Reservada',
+  cerrada: 'Cerrada', fuera_de_servicio: 'Fuera de servicio',
+};
 
-  const pedirConfirmacion = (e: MouseEvent) => {
+export default function MesaCard({ mesa, ocupada, seleccionada, onClick, onEliminar }: Props) {
+  const base = estadoMesa(mesa);
+  const ocup = ocupada || /ocup|abiert|activ/.test(base);
+  const etiqueta = ocup ? 'Ocupada' : (ETIQUETA[base] ?? 'Libre');
+  const color = ocup
+    ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+    : /reserv/.test(base)
+      ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+      : /cerrad|fuera/.test(base)
+        ? 'bg-red-500/15 text-red-400 border-red-500/30'
+        : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+
+  async function eliminar(e: MouseEvent) {
     e.stopPropagation();
-    confirmar(`¿Quitar ${nombreMesa(mesa)}?`, 'Esta acción no se deshace.', 'Sí, quitar').then(ok => {
-      if (ok) onQuitar(mesa);
-    });
-  };
+    if (await confirmar('Eliminar mesa', `¿Eliminar ${mesa.nombre}? Esta acción no se deshace.`)) onEliminar();
+  }
 
   return (
-    <div
-      onClick={() => onSeleccionar(mesa)}
-      className={`relative cursor-pointer rounded-2xl border p-4 transition ${
-        seleccionada ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900 hover:border-zinc-600'
-      }`}
-    >
-      <span
-        onClick={pedirConfirmacion}
-        title="Quitar mesa"
-        className="absolute right-2 top-2 cursor-pointer rounded-full px-1.5 text-zinc-600 hover:bg-red-500/20 hover:text-red-400"
-      >
-        ×
+    <button onClick={onClick}
+      className={`w-full text-left rounded-xl border p-4 transition ${
+        seleccionada ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900 hover:border-zinc-600'}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-semibold text-zinc-100 truncate">{mesa.nombre}</p>
+          <p className="text-xs text-zinc-500">{capacidadMesa(mesa)} personas · {mesa.zona}</p>
+        </div>
+        <span onClick={eliminar} className="text-zinc-600 hover:text-red-400 cursor-pointer px-1 text-lg leading-none">×</span>
+      </div>
+      <span className={`mt-3 inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
+        {etiqueta}
       </span>
-      <p className="text-base font-semibold text-zinc-100">{nombreMesa(mesa)}</p>
-      <p className="text-xs text-zinc-500">{zonaMesa(mesa)} · {capacidadMesa(mesa)} pax</p>
-      <span
-        className={`mt-3 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${
-          ocupada ? 'bg-red-500/15 text-red-400' : 'bg-emerald-500/15 text-emerald-400'
-        }`}
-      >
-        {ocupada ? 'Ocupada' : 'Libre'}
-      </span>
-    </div>
+    </button>
   );
 }
