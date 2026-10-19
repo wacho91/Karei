@@ -32,13 +32,14 @@ export default function TablesPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           <div className="lg:col-span-2">
-            <MapaMesas mesas={base.mesas} ocupadas={base.ocupadas} mesaId={pos.mesaId} cargando={base.cargando}
+            <MapaMesas mesas={base.mesas} ocupadas={base.ocupadas} mesaId={pos.mesaId as any} cargando={base.cargando}
               onSeleccionar={pos.seleccionar} onEliminar={base.eliminar} onDiagnostico={diagnostico}
               onDemo={base.crearDemo} onNueva={() => setModalNueva(true)} />
           </div>
 
           <aside className="space-y-4">
-            {pos.mesaId && (pos.borrador.length > 0 || !pos.cuenta) && (
+            {/* !== null evita que React pinte "NaN" si algún id viniera raro */}
+            {pos.mesaId !== null && (pos.borrador.length > 0 || !pos.cuenta) && (
               <PanelBorrador mesaNombre={mesaActual?.nombre ?? 'Mesa'} items={pos.borrador}
                 onAjustar={pos.ajustar} onNota={pos.notaDe} onLimpiar={pos.limpiar} onEnviar={pos.enviar} />
             )}
