@@ -19,6 +19,10 @@ FIXES INCLUIDOS
           real NO tiene created_at: "no such column: created_at") +
           nombre/precio completados desde recipes si la tabla no los guarda +
           la PK de items puede llamarse distinto de "id" (item_id, uuid...).
+  E-14h · sesiones y pedidos se crean SIEMPRE con opened_by_id/waiter_id de
+          un usuario REAL de la DB (antes quedaban NULL y las rutas VIEJAS
+          del backend crasheaban al leer la relación del usuario → 500 sin
+          cabeceras CORS → el navegador lo muestra como "bloqueado por CORS").
 
 RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
   POST /tables/{table_id}/open                  → abre mesa (sesión + pedido)
@@ -329,6 +333,32 @@ def _norm_id(x) -> str:
     return str(x or "").strip().replace("-", "")
 
 
+def _usuario_any(db) -> str:
+    """FIX E-14h: las rutas VIEJAS del backend (mapa de mesas, cocina) suelen
+    leer session.opened_by.name / order.waiter.name. Si esos ids quedan NULL,
+    la ruta vieja revienta con excepción sin manejar → 500 SIN cabeceras CORS
+    (el navegador lo pinta como "bloqueado por CORS" / Network Error).
+    Devolvemos un id de usuario REAL de la DB para que la relación resuelva
+    siempre. Preferimos un ADMIN; si no hay tabla de usuarios, ceros."""
+    if _CACHÉ.get("usuario_id"):
+        return _CACHÉ["usuario_id"]
+    uid = "00000000000000000000000000000000"
+    for tabla in ("users", "user", "usuarios", "employees", "staff"):
+        for sql in (f"SELECT id FROM {tabla} WHERE role IN ('ADMIN','admin') LIMIT 1",
+                    f"SELECT id FROM {tabla} WHERE rol IN ('ADMIN','admin') LIMIT 1",
+                    f"SELECT id FROM {tabla} LIMIT 1"):
+            try:
+                r = db.execute(text(sql)).mappings().first()
+                if r and r["id"]:
+                    uid = str(r["id"])
+                    _CACHÉ["usuario_id"] = uid
+                    return uid
+            except Exception:
+                continue
+    _CACHÉ["usuario_id"] = uid
+    return uid
+
+
 def _mesa(db, table_id: str):
     limpio = _norm_id(table_id)
     m = db.execute(text("SELECT * FROM tables WHERE id IN (:a, :b)"),
@@ -396,6 +426,7 @@ def _abrir_sesion(db, mesa, guest_count: int):
         "id": sid,
         "tenant_id": mesa["tenant_id"],
         "table_id": mesa["id"],
+        "opened_by_id": _usuario_any(db),
         "status": "OPEN",
         "guest_count": guest_count,
         "opened_at": _now(),
@@ -416,6 +447,7 @@ def _crear_orden(db, mesa, sesion) -> dict:
         "branch_id": mesa["branch_id"],
         "session_id": (sesion["id"] if sesion and "id" in sesion else None),
         "table_id": mesa["id"],
+        "waiter_id": _usuario_any(db),
         "order_number": datetime.datetime.utcnow().strftime("ORD-%H%M%S"),
         "channel": "POS",
         "status": "OPEN",
