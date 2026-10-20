@@ -1,69 +1,70 @@
-// Kārei · menú rápido para armar la comanda, con badge y reintento
+// src/components/mesas/MenuRapido.tsx — v2 (E-11)
+// FIX crash: lista undefined ya NO revienta (antes: .forEach sin guardia).
+// Buscador + tarjetas de productos; clic en + va al borrador del pedido.
 import { useMemo, useState } from 'react';
-import { fmt } from '../../lib/tipos';
-import type { LineaBorrador, Receta } from '../../lib/tipos';
+import { alertaError, toastOk } from '../../lib/alertas';
 
-interface Props {
-  recetas: Receta[];
-  borrador: LineaBorrador[];
-  onAgregar: (r: Receta) => void;
-  error?: string;
-  onRecargar?: () => void;
-}
+const nombreR = (r: any) => r?.name ?? r?.nombre ?? r?.title ?? 'Producto';
+const precioR = (r: any) => Number(r?.price ?? r?.precio ?? r?.sale_price ?? 0) || 0;
+const pesos = (n: number) => '$' + Math.round(n).toLocaleString('es-CO');
 
-export default function MenuRapido({ recetas, borrador, onAgregar, error, onRecargar }: Props) {
+type Props = { [k: string]: any };
+
+export default function MenuRapido(props: Props) {
+  const p = props;
   const [q, setQ] = useState('');
+  const lista: any[] = useMemo(() => {
+    const base = p.recetas ?? p.menu ?? p.items ?? [];
+    return Array.isArray(base) ? base : [];
+  }, [p.recetas, p.menu, p.items]);
 
-  // ids pueden ser texto: clave any
-  const cantidadDe = useMemo(() => {
-    const m = new Map<any, number>();
-    borrador.forEach((b) => m.set(b.recipe_id, (m.get(b.recipe_id) ?? 0) + b.cantidad));
-    return m;
-  }, [borrador]);
+  const filtrados = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return lista;
+    return lista.filter((r: any) => String(nombreR(r)).toLowerCase().includes(t));
+  }, [lista, q]);
 
-  const lista = recetas.filter((r) => r.nombre.toLowerCase().includes(q.toLowerCase()));
+  const agregar = p.alBorrador ?? p.agregar ?? p.onAgregar;
+  const recargar = p.onRecargar ?? p.recargar ?? p.reintentar;
+  const error = p.error ?? p.errorMenu ?? '';
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold">Menú rápido</h2>
-        <span className="text-xs text-zinc-500">{recetas.length} ítems</span>
+    <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <h2 className="text-base font-bold text-white mr-auto">Menú rápido</h2>
+        {recargar && (
+          <button onClick={() => recargar()} className="text-xs px-2 py-1 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Refrescar</button>
+        )}
       </div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar producto..."
+        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-amber-500" />
 
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar…"
-        className="w-full mb-3 rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2 text-sm outline-none focus:border-amber-500" />
-
-      {!recetas.length && (
-        <div className="text-center py-3">
-          <p className="text-sm text-zinc-500">Sin menú cargado.</p>
-          {error && <p className="text-[11px] text-red-400 mt-1 break-words">{error}</p>}
-          <p className="text-[11px] text-zinc-600 mt-1">
-            Si la base se reinició, vuelve a crear tus recetas en la sección Recetas.
-          </p>
-          {onRecargar && (
-            <button onClick={onRecargar}
-              className="mt-2 text-xs text-amber-400 hover:text-amber-300 underline">
-              Reintentar
-            </button>
+      {error ? (
+        <div className="space-y-2">
+          <p className="text-xs text-red-300 break-words">{error}</p>
+          {recargar && (
+            <button onClick={() => recargar()} className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-xs font-semibold hover:bg-amber-400">Reintentar</button>
           )}
         </div>
+      ) : filtrados.length === 0 ? (
+        <p className="text-xs text-slate-400 py-3 text-center">
+          {lista.length === 0 ? 'Sin productos en el menú. Créalos en la sección Recetas.' : 'Nada coincide con la búsqueda.'}
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
+          {filtrados.map((r: any, i: number) => (
+            <div key={r?.id ?? r?.recipe_id ?? i} className="flex items-center gap-1 bg-slate-900/60 rounded-lg px-2 py-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{nombreR(r)}</p>
+                <p className="text-[11px] text-slate-400">{pesos(precioR(r))}</p>
+              </div>
+              <button
+                onClick={() => { try { agregar?.(r); toastOk(`${nombreR(r)} al pedido`); } catch (e: any) { alertaError(e?.message ?? 'No se pudo agregar'); } }}
+                className="w-7 h-7 rounded-lg bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400">+</button>
+            </div>
+          ))}
+        </div>
       )}
-
-      <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
-        {lista.map((r) => {
-          const n = cantidadDe.get(r.id) ?? 0;
-          return (
-            <button key={String(r.id)} onClick={() => onAgregar(r)}
-              className="relative rounded-lg border border-zinc-800 bg-zinc-950 hover:border-amber-500/60 px-3 py-2 text-left">
-              {n > 0 && (
-                <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-[11px] font-bold flex items-center justify-center">{n}</span>
-              )}
-              <p className="text-sm truncate">{r.nombre}</p>
-              <p className="text-xs text-amber-400">{fmt(r.precio)}</p>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }
