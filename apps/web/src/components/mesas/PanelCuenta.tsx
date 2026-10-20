@@ -1,57 +1,74 @@
-// Kārei · panel de la cuenta abierta de la mesa seleccionada
-import { fmt } from '../../lib/tipos';
-import type { Cuenta, LineaCuenta } from '../../lib/tipos';
+// src/components/mesas/PanelCuenta.tsx — v2 (E-11)
+// FIX crash: cuenta null ya NO revienta (antes: cuenta.items sin guardia).
+// Pedido abierto, líneas con − / +, total y botón Cobrar.
+import { toastOk } from '../../lib/alertas';
 
-interface Props {
-  cuenta: Cuenta;
-  onSumar: (item: LineaCuenta) => void;
-  onRestar: (item: LineaCuenta) => void;
-  onCobrar: () => void;
-}
+const lineasDe = (c: any): any[] => {
+  const l = c?.items ?? c?.lineas ?? c?.lines ?? c?.order?.items ?? [];
+  return Array.isArray(l) ? l : [];
+};
+const idDe = (c: any): string => {
+  const id = c?.order?.id ?? c?.orderId ?? c?.order_id ?? c?.id;
+  return id === undefined || id === null ? '' : String(id);
+};
+const nombreL = (l: any) => l?.name ?? l?.nombre ?? l?.recipe_name ?? l?.recipe?.name ?? 'Producto';
+const cant = (l: any) => Math.max(1, Number(l?.quantity ?? l?.qty ?? l?.cantidad ?? 1) || 1);
+const precio = (l: any) => Number(l?.price ?? l?.precio ?? l?.unit_price ?? l?.price_at_sale ?? 0) || 0;
+const pesos = (n: number) => '$' + Math.round(n).toLocaleString('es-CO');
 
-export default function PanelCuenta({ cuenta, onSumar, onRestar, onCobrar }: Props) {
-  const conNotas = cuenta.items.filter((i) => i.notes);
+type Props = { [k: string]: any };
+
+export default function PanelCuenta(props: Props) {
+  const p = props;
+  const cta = p.cuenta ?? p.pedido ?? null;
+  const lineas = lineasDe(cta);
+  const oid = idDe(cta);
+  const mesaTxt = p.mesa?.name ?? p.mesa?.nombre ?? p.mesa?.code ?? 'Mesa';
+  const total = lineas.reduce((s: number, l: any) => s + cant(l) * precio(l), 0);
+  const sumar = p.sumarItem ?? p.sumar;
+  const restar = p.restarItem ?? p.restar;
+  const cobrar = p.onCobrar ?? p.alCobrar ?? p.cobrar;
+  const cerrar = p.onCerrar ?? p.cerrar ?? p.alCerrar;
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold">Cuenta actual</h2>
-        {/* Guard anti-NaN: si no hay id real, no mostramos número */}
-        <span className="text-xs text-zinc-500">
-          {cuenta.orderId ? `Pedido #${cuenta.orderId}` : 'Cuenta abierta'}
+    <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <h2 className="text-base font-bold text-white mr-auto">{mesaTxt}</h2>
+        <span className={`text-xs px-2 py-0.5 rounded-full ${oid ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-300'}`}>
+          {oid ? `Pedido #${oid.slice(0, 8)}` : 'Cuenta abierta'}
         </span>
+        {cerrar && (
+          <button onClick={() => cerrar()} title="Cerrar panel"
+            className="w-6 h-6 rounded-full bg-slate-700 text-slate-300 text-xs hover:bg-slate-600">✕</button>
+        )}
       </div>
 
-      <div className="space-y-2">
-        {cuenta.items.map((i, idx) => (
-          <div key={i.id || idx} className="flex items-center gap-2 rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm truncate">{i.nombre}</p>
-              <p className="text-xs text-zinc-500">{fmt(i.precio)} × {i.cantidad}</p>
+      {lineas.length === 0 ? (
+        <p className="text-xs text-slate-400 py-3 text-center">
+          Sin productos todavía. Agrégalos desde el Menú rápido de abajo.
+        </p>
+      ) : (
+        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+          {lineas.map((l: any, i: number) => (
+            <div key={l?.id ?? l?.item_id ?? i} className="flex items-center gap-2 bg-slate-900/60 rounded-lg px-2 py-1.5">
+              <span className="text-sm text-white flex-1 truncate">{cant(l)} × {nombreL(l)}</span>
+              <span className="text-xs text-slate-400">{pesos(cant(l) * precio(l))}</span>
+              {restar && <button onClick={() => restar(l)} className="w-6 h-6 rounded-md bg-slate-700 text-white text-sm hover:bg-slate-600">−</button>}
+              {sumar && <button onClick={() => sumar(l)} className="w-6 h-6 rounded-md bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400">+</button>}
             </div>
-            <button onClick={() => onRestar(i)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">−</button>
-            <span className="w-6 text-center text-sm">{i.cantidad}</span>
-            <button onClick={() => onSumar(i)} className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300">+</button>
-          </div>
-        ))}
-      </div>
-
-      {conNotas.length > 0 && (
-        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
-          <p className="font-semibold mb-1">Especificaciones</p>
-          {conNotas.map((i) => (<p key={i.id || i.nombre}>· {i.nombre}: {i.notes}</p>))}
+          ))}
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3">
-        <span className="text-sm text-zinc-400">Total</span>
-        <span className="text-lg font-bold text-amber-400">{fmt(cuenta.total)}</span>
+      <div className="flex items-center gap-2 border-t border-slate-700 pt-3">
+        <span className="text-sm text-slate-400">Total</span>
+        <span className="text-lg font-bold text-white mr-auto">{pesos(total)}</span>
+        <button onClick={() => { cobrar ? cobrar() : toastOk('Sin acción de cobro'); }}
+          disabled={lineas.length === 0}
+          className="px-4 py-2 rounded-lg bg-amber-500 text-slate-900 text-sm font-semibold hover:bg-amber-400 disabled:opacity-40">
+          Cobrar
+        </button>
       </div>
-
-      <button onClick={onCobrar}
-        className="mt-4 w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 py-2.5 font-semibold text-white">
-        Cobrar cuenta
-      </button>
     </div>
   );
 }
