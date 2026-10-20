@@ -1,55 +1,77 @@
-// Kārei · lectura de la cuenta abierta de una mesa (ids crudos)
-import { api, primerArray, soltar, textoError } from './http';
-import { campo, num, precioItem, cantidadItem } from './tipos';
-import type { Cuenta, Id, LineaCuenta } from './tipos';
+// src/lib/cuentaApi.ts — v2 (E-12)
+// CLAVE: GET /pos/tables/{id}/order (SINGULAR) va de primera — el 405 de la
+// consola probó que ese camino existe (405 = ruta viva con otro método).
+// Regla nueva: 404/405/409/422 AVANZAN a la siguiente candidata; red/500 cortan.
+import { api } from './http';
+import { buscarRuta, conParams, cargarMapaRutas } from './rutas';
 
-const PLANTILLAS = (id: Id): string[] => [
-  `/pos/tables/${id}/account`,
+let rutaGanadora: string | null = null;
+
+const GETS = (id: string): string[] => [
+  `/pos/tables/${id}/order`,            // SINGULAR — la 405-probada
   `/pos/tables/${id}/orders`,
-  `/pos/tables/${id}/order`,
   `/pos/tables/${id}/current-order`,
   `/pos/orders?table_id=${id}`,
   `/pos/current-order?table_id=${id}`,
+  `/pos/tables/${id}/account`,
 ];
+const AVANZAR = [400, 404, 405, 409, 422];
 
-const idDe = (x: any): Id | null => {
-  const v = campo(x, 'orderId', 'order_id', 'id', 'id_orden', 'pedido_id');
-  return v !== undefined && v !== null && v !== '' ? v : null;
-};
+// Convierte la respuesta en una cuenta usable; rechaza objetos MESA.
+function normalizar(data: any, mesaId: string): any {
+  if (!data || typeof data !== 'object') return null;
+  let o: any = Array.isArray(data) ? data[0] : data;
+  if (o?.order && typeof o.order === 'object' && !Array.isArray(o.order)) o = o.order;
+  if (Array.isArray(o)) o = o[0] ?? null;
+  if (!o || typeof o !== 'object') return null;
+  if (o.capacity != null || o.capacidad != null || o.zone != null || o.zona != null) return null;
+  const tid = o.table_id ?? o.mesa_id ?? o.tableId;
+  if (tid !== undefined && tid !== null && String(tid) !== mesaId) return null;
+  const items = o.items ?? o.lineas ?? o.lines;
+  if (Array.isArray(items)) return { ...o, items };
+  if (tid != null || o.opened_at || o.created_at || o.abierta != null) return { ...o, items: [] };
+  return null;
+}
 
-const aLinea = (i: any): LineaCuenta => ({
-  id: campo(i, 'id', 'item_id', 'line_id', 'detail_id') ?? 0,
-  recipeId: campo(i, 'recipe_id', 'receta_id', 'recipeId', 'product_id') ?? 0,
-  nombre: String(campo(i, 'nombre', 'name', 'recipe_name', 'receta', 'title', 'description') ?? 'Ítem'),
-  precio: precioItem(i),
-  cantidad: cantidadItem(i),
-  notes: String(campo(i, 'notes', 'notas', 'note') ?? ''),
-});
+async function probar(url: string, mesaId: string): Promise<any> {
+  const r = await api.get(url);
+  const cta = normalizar(r?.data, mesaId);
+  if (cta) rutaGanadora = url;
+  return cta;
+}
 
-export const traerCuenta = async (mesaId: Id): Promise<Cuenta> => {
-  let ultimo = '';
-  for (const ruta of PLANTILLAS(mesaId)) {
-    try {
-      const r = await api.get(ruta);
-      const data = soltar(r?.data);
-      // Si responde un array de pedidos, usa el primero que traiga ítems.
-      const raiz: any = Array.isArray(data)
-        ? (data.find((o: any) => o?.items?.length) ?? data[0])
-        : data;
-      const items: LineaCuenta[] = primerArray(raiz?.items ?? raiz).map(aLinea);
-      if (!items.length) { ultimo = `${ruta}: sin ítems`; continue; }
-      const orden = campo(raiz, 'order', 'orden', 'pedido') ?? raiz;
-      const subtotal = items.reduce((s, i) => s + i.precio * i.cantidad, 0);
-      return {
-        orderId: idDe(orden) ?? idDe(raiz) ?? idDe(data),
-        mesaId,
-        items,
-        estado: String(campo(raiz, 'estado', 'status', 'state') ?? 'abierta'),
-        total: num(campo(raiz, 'total', 'total_amount', 'amount'), subtotal),
-      };
-    } catch (e: any) {
-      ultimo = textoError(e);
+export async function traerCuenta(mesaId: any): Promise<any> {
+  const id = String(mesaId ?? '');
+  if (!id) return null;
+  await cargarMapaRutas();
+
+  if (rutaGanadora) {
+    try { return await probar(rutaGanadora, id); } catch (e: any) {
+      if (!AVANZAR.includes(Number(e?.response?.status))) rutaGanadora = null;
     }
   }
-  throw new Error(ultimo || 'Sin cuenta abierta');
-};
+  for (const url of GETS(id)) {
+    try {
+      const cta = await probar(url, id);
+      if (cta) return cta;
+      return null; // 200 sin cuenta = verdad definitiva (la mesa no tiene pedido)
+    } catch (e: any) {
+      if (!AVANZAR.includes(Number(e?.response?.status))) return null;
+    }
+  }
+  const pat = buscarRuta('get', [/order/, /cuenta/, /account/], 1);
+  if (pat) {
+    try { return await probar(conParams(pat, [id]), id); } catch { /* fin */ }
+  }
+  return null;
+}
+
+// Compatibilidad con imports viejos
+export const PLANTILLAS = (id: any) => GETS(String(id ?? ''));
+export function idDe(data: any): string {
+  let o: any = data;
+  if (o?.order && typeof o.order === 'object') o = o.order;
+  const id = o?.id ?? o?.order_id ?? o?.orderId;
+  return id == null ? '' : String(id);
+}
+export function olvidarRutaCuenta() { rutaGanadora = null; }
