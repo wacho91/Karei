@@ -106,6 +106,13 @@ _engine = create_engine(
     connect_args={"check_same_thread": False, "timeout": 15}
     if DB_URL.startswith("sqlite") else {},
 )
+if DB_URL.startswith("sqlite"):
+    try:
+        _ruta_db = DB_URL.split("///", 1)[-1]
+        print("[pos_compat] archivo DB:", os.path.abspath(_ruta_db),
+              "| existe:", os.path.exists(_ruta_db))
+    except Exception:
+        pass
 _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 
 
@@ -305,20 +312,34 @@ def _extraer_guest_count(payload: Any) -> int:
 # ─────────────────────────────────────────────────────────────────────────
 # 4. HELPERS DE DOMINIO (mesas, sesiones, órdenes)
 # ─────────────────────────────────────────────────────────────────────────
+def _norm_id(x) -> str:
+    """FIX E-14f: la DB guarda ids SIN guiones (1f07a60893fe...) pero el front
+    a veces los manda en formato UUID CON guiones (1f07a608-93fe-...).
+    Es el MISMO id: normalizamos para aceptar ambas formas en todas las
+    búsquedas. Devuelve la forma sin guiones."""
+    return str(x or "").strip().replace("-", "")
+
+
 def _mesa(db, table_id: str):
-    return db.execute(text("SELECT * FROM tables WHERE id = :i"),
-                      {"i": table_id}).mappings().first()
+    limpio = _norm_id(table_id)
+    m = db.execute(text("SELECT * FROM tables WHERE id IN (:a, :b)"),
+                   {"a": str(table_id), "b": limpio}).mappings().first()
+    if not m:
+        _log("mesa no hallada (busqué id =", table_id, "| sin guiones =", limpio, ")")
+    return m
 
 
 def _sesion_abierta(db, table_id: str):
-    return db.execute(text("SELECT * FROM table_sessions WHERE table_id = :t AND status = 'OPEN' "
-                           "ORDER BY opened_at DESC LIMIT 1"), {"t": table_id}).mappings().first()
+    return db.execute(text("SELECT * FROM table_sessions WHERE table_id IN (:a, :b) "
+                           "AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1"),
+                      {"a": str(table_id), "b": _norm_id(table_id)}).mappings().first()
 
 
 def _orden_abierta(db, table_id: str):
-    return db.execute(text("SELECT * FROM orders WHERE table_id = :t "
+    return db.execute(text("SELECT * FROM orders WHERE table_id IN (:a, :b) "
                            "AND status NOT IN ('PAID','CANCELLED') "
-                           "ORDER BY created_at DESC LIMIT 1"), {"t": table_id}).mappings().first()
+                           "ORDER BY created_at DESC LIMIT 1"),
+                      {"a": str(table_id), "b": _norm_id(table_id)}).mappings().first()
 
 
 def _insertar(db, tabla: str, valores: dict):
@@ -402,23 +423,27 @@ def _crear_orden(db, mesa, sesion) -> dict:
 
 def _items_de_orden(db, order_id: str) -> list:
     tabla = _tabla_items(db)
-    filas = db.execute(text(f"SELECT * FROM {tabla} WHERE order_id = :o ORDER BY created_at"),
-                       {"o": order_id}).mappings().all()
+    filas = db.execute(text(f"SELECT * FROM {tabla} WHERE order_id IN (:a, :b) ORDER BY created_at"),
+                       {"a": str(order_id), "b": _norm_id(order_id)}).mappings().all()
     return [_mapear_salida(dict(f)) for f in filas]
 
 
 def _recalcular(db, order_id: str):
-    items = _items_de_orden(db, order_id)
+    fila = _orden_por_id(db, order_id)
+    if not fila:
+        return 0.0
+    real = fila["id"]  # id tal cual está en la DB
+    items = _items_de_orden(db, real)
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
     try:
         db.execute(text("UPDATE orders SET subtotal = :s, total = :t, updated_at = :u WHERE id = :i"),
-                   {"s": subtotal, "t": subtotal, "u": _now(), "i": order_id})
+                   {"s": subtotal, "t": subtotal, "u": _now(), "i": real})
         db.execute(text("""
             UPDATE table_sessions
                SET subtotal_cents = :sc, total_cents = :tc, updated_at = :u
              WHERE id = (SELECT session_id FROM orders WHERE id = :i)
         """), {"sc": int(round(subtotal * 100)), "tc": int(round(subtotal * 100)),
-               "u": _now(), "i": order_id})
+               "u": _now(), "i": real})
         db.commit()
     except Exception:
         db.rollback()
@@ -444,7 +469,9 @@ def _agregar_items(db, mesa, orden, items: list) -> list:
     cols = _columnas(db, tabla)
     creados = []
     for it in items:
-        recipe_id = str(it.get("recipe_id") or "")
+        # FIX E-14f: normalizar recipe_id (con o sin guiones) para que coincida
+        # con recipes.id en la DB y el nombre/precio se resuelvan correctamente
+        recipe_id = _norm_id(it.get("recipe_id"))
         receta = db.execute(text("SELECT * FROM recipes WHERE id = :r"),
                             {"r": recipe_id}).mappings().first()
         nombre = it.get("name") or (receta["name"] if receta else "")
@@ -544,7 +571,7 @@ def crear_pedido(payload: Any = Body(None), db=Depends(_db)):
 
 @router.post("/api/v1/pos/orders/{order_id}/items")
 def items_a_orden(order_id: str, payload: Any = Body(None), db=Depends(_db)):
-    orden = db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    orden = _orden_por_id(db, order_id)
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
     items = _extraer_items(payload)
@@ -560,19 +587,23 @@ def quitar_item(order_id: str, item_id: str, db=Depends(_db)):
     tabla = _tabla_items(db)
     cols = _columnas(db, tabla)
     col_id = _col_de("id", cols) or "id"
-    r = db.execute(text(f"DELETE FROM {tabla} WHERE {col_id} = :x AND order_id = :o"),
-                   {"x": item_id, "o": order_id})
+    # ids aceptados con o sin guiones (front y DB difieren a veces)
+    par = {"x": str(item_id), "y": _norm_id(item_id),
+           "a": str(order_id), "b": _norm_id(order_id)}
+    r = db.execute(text(f"DELETE FROM {tabla} WHERE {col_id} IN (:x, :y) AND order_id IN (:a, :b)"),
+                   par)
     db.commit()
     if r.rowcount == 0:
         # quizá vino el recipe_id en vez del id de línea → borra UNA línea de ese producto
         col_rec = _col_de("recipe_id", cols)
         if col_rec:
-            r = db.execute(text(f"DELETE FROM {tabla} WHERE {col_rec} = :x AND order_id = :o "
-                                f"AND rowid = (SELECT rowid FROM {tabla} WHERE {col_rec} = :x "
-                                f"AND order_id = :o LIMIT 1)"), {"x": item_id, "o": order_id})
+            r = db.execute(text(f"DELETE FROM {tabla} WHERE {col_rec} IN (:x, :y) "
+                                f"AND order_id IN (:a, :b) "
+                                f"AND rowid = (SELECT rowid FROM {tabla} WHERE {col_rec} IN (:x, :y) "
+                                f"AND order_id IN (:a, :b) LIMIT 1)"), par)
             db.commit()
     _recalcular(db, order_id)
-    orden = db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    orden = _orden_por_id(db, order_id)
     _log("items: quitado", item_id, "→", orden["id"] if orden else "?")
     return _order_dict(db, orden)
 
@@ -588,21 +619,23 @@ def ajustar_item(order_id: str, item_id: str, payload: Any = Body(None), db=Depe
         return quitar_item(order_id, item_id, db)
     if not col_qty:
         raise HTTPException(500, "[pos_compat] tabla de items sin columna de cantidad")
-    db.execute(text(f"UPDATE {tabla} SET {col_qty} = :q WHERE {col_id} = :x AND order_id = :o"),
-               {"q": nueva, "x": item_id, "o": order_id})
+    db.execute(text(f"UPDATE {tabla} SET {col_qty} = :q WHERE {col_id} IN (:x, :y) "
+                    f"AND order_id IN (:a, :b)"),
+               {"q": nueva, "x": str(item_id), "y": _norm_id(item_id),
+                "a": str(order_id), "b": _norm_id(order_id)})
     db.commit()
     _recalcular(db, order_id)
-    orden = db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    orden = _orden_por_id(db, order_id)
     return _order_dict(db, orden)
 
 
 @router.post("/api/v1/pos/orders/{order_id}/send")
 def enviar_comanda(order_id: str, payload: Any = Body(None), db=Depends(_db)):
-    orden = db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    orden = _orden_por_id(db, order_id)
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
     db.execute(text("UPDATE orders SET status = 'SENT', updated_at = :u WHERE id = :i"),
-               {"u": _now(), "i": order_id})
+               {"u": _now(), "i": orden["id"]})
     db.commit()
     _log("send: pedido", order_id, "→ cocina ✓")
     return _order_dict(db, _orden_por_id(db, order_id))
@@ -610,7 +643,7 @@ def enviar_comanda(order_id: str, payload: Any = Body(None), db=Depends(_db)):
 
 @router.post("/api/v1/pos/orders/{order_id}/advance")
 def avanzar_pedido(order_id: str, payload: Any = Body(None), db=Depends(_db)):
-    orden = db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    orden = _orden_por_id(db, order_id)
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
     actual = orden["status"]
@@ -619,14 +652,15 @@ def avanzar_pedido(order_id: str, payload: Any = Body(None), db=Depends(_db)):
     except (ValueError, IndexError):
         siguiente = "DELIVERED" if actual != "PAID" else "PAID"
     db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
-               {"s": siguiente, "u": _now(), "i": order_id})
+               {"s": siguiente, "u": _now(), "i": orden["id"]})
     db.commit()
     _log("advance:", order_id, actual, "→", siguiente)
     return _order_dict(db, _orden_por_id(db, order_id))
 
 
 def _orden_por_id(db, order_id: str):
-    return db.execute(text("SELECT * FROM orders WHERE id = :i"), {"i": order_id}).mappings().first()
+    return db.execute(text("SELECT * FROM orders WHERE id IN (:a, :b)"),
+                      {"a": str(order_id), "b": _norm_id(order_id)}).mappings().first()
 
 
 @router.get("/api/v1/pos/tables/{table_id}/order")
