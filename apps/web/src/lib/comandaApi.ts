@@ -1,127 +1,152 @@
-// comandaApi.ts v3 — pedidos y líneas: primero rutas reales (mapa), luego candidatas
+// src/lib/comandaApi.ts — v4 (E-12)
+// FIX RAÍZ del 405: antes un 405 CORTABA el bucle y la ruta real de creación
+// (POST /pos/orders) jamás se probaba. Ahora 405/404/409/422 AVANZAN.
+// Además: busca orden abierta (GET /pos/tables/{id}/order), soporta creación
+// mesa-céntrica (/tables/{id}/items) y si todo falla el error muestra las
+// rutas POST/GET REALES del openapi para capturarlas.
 import { api } from './http';
-import { cargarMapaRutas, buscarRuta, conParams, hayMapa } from './rutas';
+import { buscarRuta, conParams, cargarMapaRutas, rutasDe, hayMapa, origenMapa } from './rutas';
+import { traerCuenta } from './cuentaApi';
 
-function campo(o: any, ...ks: string[]) {
-  for (const k of ks) { const v = o?.[k]; if (v != null && v !== '') return v; }
-  return undefined;
-}
+const AVANZAR = [400, 404, 405, 409, 422];
+const fallidos = new Set<string>();
+const clave = (u: string, b: any) => 'post ' + u + ' ' + JSON.stringify(b ?? {});
 
-function idDe(x: any): any {
-  const nodos = [x, x?.data, x?.order, x?.pedido, x?.data?.order];
-  for (const n of nodos) {
-    const v = campo(n, 'orderId', 'order_id', 'id', 'id_orden', 'pedido_id', 'uuid');
-    if (v !== undefined) return v;
-  }
-  return undefined;
-}
+const idDe = (d: any): string => {
+  let o: any = d;
+  if (o?.order && typeof o.order === 'object') o = o.order;
+  const id = o?.id ?? o?.order_id ?? o?.orderId ?? o?.uuid;
+  return id == null ? '' : String(id);
+};
 
-function cuerposItem(l: any): any[] {
-  const rid = campo(l, 'recipeId', 'recipe_id', 'receta_id', 'id') ?? 0;
-  const cant = Number(campo(l, 'cantidad', 'quantity', 'qty') ?? 1) || 1;
-  const notas = campo(l, 'notes', 'nota', 'notas') ?? '';
-  const nombre = campo(l, 'nombre', 'name') ?? '';
-  return [{ recipe_id: rid, quantity: cant, notes: notas, name: nombre },
-          { receta_id: rid, cantidad: cant, notas, nombre }];
-}
+const cuerpos = (it: any) => {
+  const rid = it?.recipe_id ?? it?.receta_id ?? it?.recipe?.id ?? it?.receta?.id ?? it?.id;
+  const q = Number(it?.quantity ?? it?.cantidad ?? it?.qty ?? 1) || 1;
+  const n = it?.notes ?? it?.notas ?? '';
+  const nom = it?.name ?? it?.nombre ?? it?.recipe?.name ?? it?.recipe_name ?? '';
+  return [{ recipe_id: rid, quantity: q, notes: n, name: nom }, { receta_id: rid, cantidad: q, notas: n, nombre: nom }];
+};
 
-// Crea el pedido de una mesa (primero ruta descubierta, luego las conocidas)
-export async function crearPedido(mesaId: any): Promise<any> {
+export async function crearPedido(mesaId: any, primerItem?: any): Promise<{ orderId: string; consumidos: number } | null> {
+  const id = String(mesaId ?? '');
+  if (!id) return null;
   await cargarMapaRutas();
-  const patron = buscarRuta('post', [/order/], 1);
-  const intentos: Array<[string, any]> = [];
-  if (patron) {
-    const conMesa = patron.includes('{');
-    intentos.push([conMesa ? conParams(patron, [mesaId]) : patron, conMesa ? {} : { table_id: mesaId }]);
+  const L: Array<[string, any]> = [];
+  const p0 = buscarRuta('post', [/order/, /comanda/], 0);
+  if (p0) L.push([p0, { table_id: id }], [p0, { mesa_id: id }]);
+  const p1 = buscarRuta('post', [/tables.*\/(order|orders|items)$/], 1);
+  if (p1) {
+    const u = conParams(p1, [id]);
+    if (primerItem) for (const b of cuerpos(primerItem)) L.push([u, b]);
+    L.push([u, {}]);
   }
-  intentos.push([`/pos/tables/${mesaId}/orders`, {}], [`/pos/tables/${mesaId}/order`, {}],
-    ['/pos/orders', { table_id: mesaId }], ['/pos/orders', { mesa_id: mesaId }]);
-  const vistas = new Set<string>();
-  let ultimo: any = null;
-  for (const [url, cuerpo] of intentos) {
-    const k = url + '|' + JSON.stringify(cuerpo);
-    if (vistas.has(k)) continue;
-    vistas.add(k);
+  L.push(['/pos/orders', { table_id: id }], ['/pos/orders', { mesa_id: id }], ['/pos/tables/' + id + '/orders', {}]);
+  if (primerItem) for (const b of cuerpos(primerItem)) L.push(['/pos/tables/' + id + '/items', b]);
+
+  for (const [patron, body] of L) {
+    const url = conParams(patron, [id]);
+    const k = clave(url, body);
+    if (fallidos.has(k)) continue;
     try {
-      const d = (await api.post(url, cuerpo))?.data;
-      return (d && typeof d === 'object' && Object.keys(d).length) ? d : true;
+      const r = await api.post(url, body);
+      return { orderId: idDe(r?.data), consumidos: /items$/.test(url) && primerItem ? 1 : 0 };
     } catch (e: any) {
-      ultimo = e;
-      if (e?.response?.status !== 404 && e?.response?.status !== 422) throw e;
+      fallidos.add(k);
+      if (!AVANZAR.includes(Number(e?.response?.status))) throw e;
     }
   }
-  throw new Error(`No se pudo crear el pedido (${ultimo?.response?.status ?? 'sin respuesta'})`);
+  return null;
 }
 
-// Empuja las líneas: 422 avanza al cuerpo ES, otros errores cortan el intento
-async function empujar(url: string, items: any[]): Promise<void> {
-  for (const it of items) {
-    let hecho = false, ultimo: any = null;
-    for (const cuerpo of cuerposItem(it)) {
-      try { await api.post(url, cuerpo); hecho = true; break; }
-      catch (e: any) { ultimo = e; if (e?.response?.status !== 422) throw e; }
-    }
-    if (!hecho) throw ultimo ?? new Error('Ítem rechazado por el backend');
-  }
-}
-
-// Agrega líneas a un pedido existente (mesaId es opcional, para rutas de 2 params)
-export async function agregar(orderId: any, items: any[], mesaId?: any): Promise<any> {
-  if (!orderId) throw new Error('El pedido no tiene id en el backend');
+export async function agregar(orderId: string, items: any[], mesaId?: any): Promise<boolean> {
   await cargarMapaRutas();
-  const intentos: string[] = [];
-  const patron = buscarRuta('post', [/order.*(item|line|add)/, /(item|line).*order/], 1);
-  if (patron) intentos.push(conParams(patron, [orderId]));
-  if (mesaId) {
-    const p2 = buscarRuta('post', [/order.*(item|line|add)/, /(item|line).*order/], 2);
-    if (p2 && p2 !== patron) intentos.push(conParams(p2, [mesaId, orderId]));
-  }
-  intentos.push(`/pos/orders/${orderId}/items`, `/pos/orders/${orderId}/add-items`,
-    `/pos/orders/${orderId}/lines`, `/orders/${orderId}/items`);
-  let ultimo: any = null;
-  for (const url of [...new Set(intentos)]) {
-    try { await empujar(url, items); return true; }
-    catch (e: any) { ultimo = e; if (e?.response?.status !== 404) throw e; }
-  }
-  throw ultimo ?? new Error('No hay ruta para agregar ítems');
-}
-
-// Envía el borrador a cocina (crea el pedido si aún no existe)
-export async function enviarComanda(mesaId: any, orderId: any, items: any[]): Promise<any> {
-  if (orderId) return agregar(orderId, items, mesaId);
-  const id = idDe(await crearPedido(mesaId));
-  if (!id) throw new Error('El backend no devolvió el id del pedido');
-  return agregar(id, items, mesaId);
-}
-
-// +1 a una línea de cuenta
-export async function sumarItemCuenta(orderId: any, linea: any, mesaId?: any): Promise<any> {
-  try { return await agregar(orderId, [{ ...linea, cantidad: 1 }], mesaId); }
-  catch (e: any) {
-    const nf = e?.response?.status === 404 || /not found/i.test(String(e?.message));
-    if (!nf) throw e;
-    const conRuta = hayMapa() && !!buscarRuta('post', [/order.*(item|line|add)/], 1);
-    throw new Error(conRuta
-      ? 'El pedido ya no existe en el backend. Refresca (F5) y vuelve a abrir la mesa.'
-      : 'El backend no tiene ruta para agregar ítems al pedido.');
-  }
-}
-
-// −1 a una línea: primero DELETE, si no funciona PATCH con cantidad 0
-export async function restarItemCuenta(orderId: any, linea: any, mesaId?: any): Promise<any> {
-  const iid = campo(linea, 'id', 'itemId', 'item_id', 'line_id') ?? '';
-  await cargarMapaRutas();
+  const oid = String(orderId ?? '');
+  const mId = mesaId != null && mesaId !== '' ? String(mesaId) : '';
+  if (!oid && !mId) return false;
   const urls: string[] = [];
-  const p1 = buscarRuta('delete', [/order.*(item|line)/, /(item|line).*order/], 1);
-  if (p1) urls.push(conParams(p1, [orderId]));
-  if (mesaId) {
-    const p2 = buscarRuta('delete', [/order.*(item|line)/, /(item|line).*order/], 2);
-    if (p2 && p2 !== p1) urls.push(conParams(p2, [mesaId, orderId]));
+  if (oid) urls.push('/pos/orders/' + oid + '/items');
+  const pA = buscarRuta('post', [/order.*item/, /item.*order/], 1);
+  if (pA && oid) urls.push(conParams(pA, [oid]));
+  const p2 = buscarRuta('post', [/tables.*item/], 2);
+  if (p2 && oid && mId) urls.push(conParams(p2, [mId, oid]));
+  if (mId) urls.push('/pos/tables/' + mId + '/items');
+
+  const hechos = new Set<any>();
+  for (const url of urls) {
+    for (const it of items) {
+      if (hechos.has(it)) continue;
+      let logrado = false, fatal = false;
+      for (const b of cuerpos(it)) {
+        const k = clave(url, b);
+        if (fallidos.has(k)) continue;
+        try { await api.post(url, b); logrado = true; break; }
+        catch (e: any) {
+          fallidos.add(k);
+          if (!AVANZAR.includes(Number(e?.response?.status))) { fatal = true; break; }
+        }
+      }
+      if (logrado) hechos.add(it);
+      if (fatal) return false;
+    }
   }
-  if (iid) urls.push(`/pos/orders/${orderId}/items/${iid}`, `/orders/${orderId}/items/${iid}`);
-  for (const url of [...new Set(urls)]) {
-    try { await api.delete(url); return true; } catch { /* probamos PATCH */ }
-    try { await api.patch(url, { quantity: 0, cantidad: 0 }); return true; } catch { /* siguiente */ }
+  return items.length > 0 && items.every((it) => hechos.has(it));
+}
+
+export async function enviarComanda(mesaId: any, orderId: any, items: any[]) {
+  const id = String(mesaId ?? '');
+  const lista = (items ?? []).filter(Boolean);
+  if (!id || lista.length === 0) return;
+  let oid = String(orderId ?? '');
+  if (!oid) {
+    try {
+      const cta = await traerCuenta(id);
+      oid = String(cta?.order?.id ?? cta?.orderId ?? cta?.order_id ?? cta?.id ?? '');
+    } catch { /* sin cuenta previa */ }
   }
-  throw new Error('No se pudo restar el ítem en el backend');
+  if (oid && (await agregar(oid, lista, id))) return;
+  const creado = await crearPedido(id, lista[0]).catch(() => null);
+  if (creado?.orderId) {
+    const resto = lista.slice(creado.consumidos);
+    if (resto.length === 0 || (await agregar(creado.orderId, resto, id))) return;
+  }
+  throw new Error(detalleFallo());
+}
+
+function detalleFallo(): string {
+  const filtrar = (rs: string[]) => rs.filter((x) => /pos|order|item|table|comanda/i.test(x)).slice(0, 8).join('   ');
+  let extra = '';
+  try {
+    const post = rutasDe('post'), get = rutasDe('get');
+    console.error('[Karei] Rutas REALES del backend →', { post, get });
+    extra = hayMapa()
+      ? ` | POST reales: ${filtrar(post) || '(sin coincidencias)'} | GET reales: ${filtrar(get) || '(sin coincidencias)'} | mapa: ${origenMapa()}`
+      : ' | (no pude leer el openapi.json del backend)';
+  } catch { /* nada */ }
+  return 'No pude crear/enviar el pedido. ' + extra;
+}
+
+export async function sumarItemCuenta(orderId: any, linea: any, mesaId?: any): Promise<boolean> {
+  return agregar(String(orderId ?? ''), [linea], mesaId);
+}
+
+export async function restarItemCuenta(orderId: any, linea: any, mesaId?: any): Promise<boolean> {
+  const oid = String(orderId ?? '');
+  const mId = mesaId != null && mesaId !== '' ? String(mesaId) : '';
+  const lid = linea?.id ?? linea?.item_id ?? linea?.line_id;
+  const urls: string[] = [];
+  if (lid != null && oid) urls.push('/pos/orders/' + oid + '/items/' + lid);
+  if (lid != null && mId) urls.push('/pos/tables/' + mId + '/items/' + lid);
+  for (const u of urls) {
+    try { await api.delete(u); return true; } catch (e: any) {
+      if (!AVANZAR.includes(Number(e?.response?.status))) break;
+    }
+  }
+  for (const b of [{ quantity: 0 }, { cantidad: 0 }]) {
+    for (const u of urls) {
+      try { await api.patch(u, b); return true; } catch (e: any) {
+        if (!AVANZAR.includes(Number(e?.response?.status))) return false;
+      }
+    }
+  }
+  return false;
 }
