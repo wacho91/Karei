@@ -12,6 +12,14 @@ o español, en array ({items:[...]}) o plano ({recipe_id, quantity}), y con
 sinónimos (recipe_id/receta_id/product_id, quantity/cantidad/qty...).
 El error 422 "field required" desaparece para siempre.
 
+FIXES INCLUIDOS
+  E-14e · driver async detectado (sqlite+aiosqlite) → engine sync (MissingGreenlet).
+  E-14f · ids aceptados con o sin guiones (front UUID vs DB hex).
+  E-14g · ORDER BY adaptado a las columnas REALES de order_items (su tabla
+          real NO tiene created_at: "no such column: created_at") +
+          nombre/precio completados desde recipes si la tabla no los guarda +
+          la PK de items puede llamarse distinto de "id" (item_id, uuid...).
+
 RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
   POST /tables/{table_id}/open                  → abre mesa (sesión + pedido)
   POST /tables/{table_id}/items                 → agrega productos (auto-abre)
@@ -152,6 +160,7 @@ MAPA_ITEMS = {
     "name": ["name", "nombre", "product_name", "nombre_producto", "title", "description"],
     "quantity": ["quantity", "cantidad", "qty", "cant", "units"],
     "unit_price": ["unit_price", "price", "precio", "precio_unitario", "sale_price", "amount"],
+    "line_total": ["line_total", "total", "importe", "importe_linea"],
     "notes": ["notes", "note", "nota", "observaciones", "comment", "comentario",
               "especificaciones", "specs"],
     "created_at": ["created_at"],
@@ -346,8 +355,10 @@ def _insertar(db, tabla: str, valores: dict):
     """INSERT tolerante: solo usa columnas que existen; rellena NOT NULL comunes."""
     cols = _columnas(db, tabla)
     datos = {k: v for k, v in valores.items() if k in cols and v is not None}
-    if "id" in cols and "id" not in datos:
-        datos["id"] = _uid()
+    # FIX E-14g: la PK puede no llamarse "id" (item_id, uuid...) → usar _col_de
+    col_id = _col_de("id", cols)
+    if col_id and col_id not in datos:
+        datos[col_id] = _uid()
     if "created_at" in cols and "created_at" not in datos:
         datos["created_at"] = _now()
     if "updated_at" in cols:
@@ -423,9 +434,42 @@ def _crear_orden(db, mesa, sesion) -> dict:
 
 def _items_de_orden(db, order_id: str) -> list:
     tabla = _tabla_items(db)
-    filas = db.execute(text(f"SELECT * FROM {tabla} WHERE order_id IN (:a, :b) ORDER BY created_at"),
+    cols = _columnas(db, tabla)
+    # FIX E-14g: NO asumir columnas al ordenar. La tabla order_items REAL del
+    # proyecto no tiene created_at (sqlite: "no such column: created_at").
+    # Ordenamos por la primera columna disponible (created_at → id) y si
+    # ninguna existe, sin ORDER BY.
+    orden_por = _col_de("created_at", cols) or _col_de("id", cols)
+    sql = f"SELECT * FROM {tabla} WHERE order_id IN (:a, :b)"
+    if orden_por:
+        sql += f" ORDER BY {orden_por}"
+    filas = db.execute(text(sql),
                        {"a": str(order_id), "b": _norm_id(order_id)}).mappings().all()
-    return [_mapear_salida(dict(f)) for f in filas]
+    return _enriquecer_items(db, [_mapear_salida(dict(f)) for f in filas])
+
+
+def _enriquecer_items(db, items: list) -> list:
+    """FIX E-14g: si la tabla de items real no guarda name/unit_price (o vienen
+    vacíos), se completan desde recipes usando recipe_id. Así el front y la
+    cocina siempre ven producto y precio aunque la tabla sea minimalista."""
+    cache = {}
+    for i in items:
+        rid = _norm_id(i.get("recipe_id") or "")
+        if not rid or (i.get("name") and i.get("unit_price")):
+            continue
+        if rid not in cache:
+            try:
+                r = db.execute(text("SELECT name, price FROM recipes WHERE id = :r"),
+                               {"r": rid}).mappings().first()
+                cache[rid] = (r["name"] if r and r["name"] else "",
+                              float(r["price"]) if r and r["price"] else 0.0)
+            except Exception:
+                cache[rid] = ("", 0.0)
+        if not i.get("name"):
+            i["name"] = cache[rid][0]
+        if not i.get("unit_price"):
+            i["unit_price"] = cache[rid][1]
+    return items
 
 
 def _recalcular(db, order_id: str):
@@ -483,6 +527,7 @@ def _agregar_items(db, mesa, orden, items: list) -> list:
             "name": nombre,
             "quantity": int(it["quantity"]),
             "unit_price": float(precio),
+            "line_total": float(precio) * int(it["quantity"]),
             "notes": it.get("notes"),
         }
         # traducir a los nombres reales de columna de la tabla elegida
