@@ -42,8 +42,7 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=lifespan,
 )
-from app.pos_compat import router as pos_compat_router # ← NUEVA
-app.include_router(pos_compat_router)
+
 try:
     from app.pos_compat import router as pos_compat_router
 except ImportError:
