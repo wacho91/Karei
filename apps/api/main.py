@@ -42,6 +42,8 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=lifespan,
 )
+from pos_compat import router as pos_compat_router    # ← NUEVA
+app.include_router(pos_compat_router)                  # ← NUEVA
 
 app.add_middleware(
     CORSMiddleware,
