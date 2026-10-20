@@ -90,9 +90,21 @@ def _resolver_db_url() -> str:
     )
 
 DB_URL = _resolver_db_url()
+# ── FIX E-14e (MissingGreenlet) ──────────────────────────────────────────
+# El settings del proyecto usa un driver ASYNC (sqlite+aiosqlite). Este
+# módulo trabaja en modo SYNC: si el engine se crea con un driver async,
+# SQLAlchemy lanza MissingGreenlet en el primer query. Solución: quitar
+# el sufijo async y usar el driver sync estándar (MISMO archivo karei.db,
+# mismo camino, solo cambia el "controlador").
+for _drv in ("+aiosqlite", "+asyncpg", "+asyncmy", "+asyncodbc"):
+    if _drv in DB_URL:
+        DB_URL = DB_URL.replace(_drv, "")
+        print("[pos_compat] URL con driver async detectada → usando driver sync:", DB_URL)
+        break
 _engine = create_engine(
     DB_URL,
-    connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False, "timeout": 15}
+    if DB_URL.startswith("sqlite") else {},
 )
 _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 
