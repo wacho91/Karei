@@ -1,4 +1,10 @@
 // Kārei · hook del pedido: mesa elegida, borrador, cuenta y cobro (ids crudos)
+// v2 "A PRUEBA DE BALAS" (E-14m)
+// ----------------------------------------------------------------------------
+// FIX: los 3 callbacks (recargarMesas, marcarOcupada, desmarcar) se NORMALIZAN
+// al entrar al hook. Si la página los conecta mal o no los pasa, el hook NUNCA
+// más truena con "marcarOcupada is not a function": usa un reemplazo seguro,
+// avisa por consola ([Karei:usePedido]) y el flujo de envío sigue completo.
 import { useEffect, useState } from 'react';
 import { traerCuenta } from '../lib/cuentaApi';
 import { enviarComanda, sumarItemCuenta, restarItemCuenta } from '../lib/comandaApi';
@@ -8,10 +14,34 @@ import type { Cuenta, Id, LineaBorrador, LineaCuenta, Receta } from '../lib/tipo
 import { alertaAviso, alertaError, toastOk } from '../lib/alertas';
 
 export function usePedido(
-  recargarMesas: () => Promise<void>,
-  marcarOcupada: (id: Id) => void,
-  desmarcar: (id: Id) => void,
+  recargarMesas?: () => Promise<void>,
+  marcarOcupada?: (id: Id) => void,
+  desmarcar?: (id: Id) => void,
 ) {
+  // ── FIX E-14m: normalización de callbacks ────────────────────────────────
+  // useMesas SÍ define y SÍ retorna marcarOcupada y desmarcar. Si algo llega
+  // roto aquí, el problema está en cómo la PÁGINA invoca usePedido(...).
+  // Con estos seguros el flujo jamás se cae por un callback ausente.
+  const recargarSeguro: () => Promise<void> =
+    typeof recargarMesas === 'function' ? recargarMesas : async () => {};
+  const marcarSeguro: (id: Id) => void =
+    typeof marcarOcupada === 'function' ? marcarOcupada : () => {};
+  const desmarcarSeguro: (id: Id) => void =
+    typeof desmarcar === 'function' ? desmarcar : () => {};
+
+  if (
+    typeof recargarMesas !== 'function' ||
+    typeof marcarOcupada !== 'function' ||
+    typeof desmarcar !== 'function'
+  ) {
+    console.warn(
+      '[Karei:usePedido] La página NO conectó bien los callbacks del hook ' +
+        '(revisa cómo se invoca usePedido(...) en la página de Mesas). ' +
+        'El flujo seguirá funcionando, pero el mapa puede no refrescarse solo.',
+    );
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   const [mesaId, setMesaId] = useState<Id | null>(null);
   const [cuenta, setCuenta] = useState<Cuenta | null>(null);
   const [borrador, setBorrador] = useState<LineaBorrador[]>([]);
@@ -30,7 +60,7 @@ export function usePedido(
     try {
       const c = await traerCuenta(id);
       setCuenta(c);
-      if (c.items.length) marcarOcupada(id);
+      if (c.items.length) marcarSeguro(id);
     } catch { /* sin cuenta: se arma pedido nuevo */ }
   }
 
@@ -62,7 +92,7 @@ export function usePedido(
     const enviados = borrador;
     try {
       const id = await enviarComanda(mesaId, cuenta?.orderId ?? null, enviados);
-      marcarOcupada(mesaId);
+      marcarSeguro(mesaId);
       setBorrador([]);
       toastOk('Comanda enviada a cocina');
       try {
@@ -75,7 +105,7 @@ export function usePedido(
           total: enviados.reduce((s, b) => s + b.precio * b.cantidad, 0),
         });
       }
-      recargarMesas();
+      recargarSeguro();
     } catch (e: any) {
       alertaError('No se pudo enviar la comanda', e?.message ?? '');
     }
@@ -110,11 +140,11 @@ export function usePedido(
     const propina = Math.round((cuenta.total * pct) / 100);
     try {
       await cobrarCuenta(cuenta.orderId, cuenta.mesaId, { metodo, propina });
-      desmarcar(cuenta.mesaId);
+      desmarcarSeguro(cuenta.mesaId);
       setCuenta(null);
       setMesaId(null);
       toastOk('Cuenta cobrada');
-      recargarMesas();
+      recargarSeguro();
     } catch (e: any) {
       alertaError('No se pudo cobrar', e?.message ?? '');
       throw e;
