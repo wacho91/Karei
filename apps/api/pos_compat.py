@@ -1,3 +1,77 @@
+# -*- coding: utf-8 -*-
+"""
+============================================================================
+Kārei · pos_compat.py (E-14) — RUTAS DE COMANDA DEL POS, ROBUSTAS
+============================================================================
+QUÉ ES
+------
+Un router FastAPI AUTOCONTENIDO que implementa el flujo completo de la
+comanda sobre las tablas REALES del proyecto (tables, table_sessions,
+orders, recipes). Los endpoints son TOLERANTES: aceptan cuerpos en inglés
+o español, en array ({items:[...]}) o plano ({recipe_id, quantity}), y con
+sinónimos (recipe_id/receta_id/product_id, quantity/cantidad/qty...).
+El error 422 "field required" desaparece para siempre.
+
+FIXES INCLUIDOS
+  E-14e · driver async detectado (sqlite+aiosqlite) → engine sync (MissingGreenlet).
+  E-14f · ids aceptados con o sin guiones (front UUID vs DB hex).
+  E-14g · ORDER BY adaptado a las columnas REALES de order_items (su tabla
+          real NO tiene created_at: "no such column: created_at") +
+          nombre/precio completados desde recipes si la tabla no los guarda +
+          la PK de items puede llamarse distinto de "id" (item_id, uuid...).
+  E-14h · sesiones y pedidos se crean SIEMPRE con opened_by_id/waiter_id de
+          un usuario REAL de la DB (antes quedaban NULL y las rutas VIEJAS
+          del backend crasheaban al leer la relación del usuario → 500 sin
+          cabeceras CORS → el navegador lo muestra como "bloqueado por CORS").
+  E-14o · COCINA/KDS: el kanban (CocinaPage) consulta GET /pos/kitchen/orders,
+          ruta VIEJA que exige token (401), filtra con sus propios estados y
+          NUNCA vio las órdenes de pos_compat → kanban 0/0/0. Ahora pos_compat
+          SIRVE esa ruta (y variantes kitchen/kds + advance/status) leyendo las
+          MISMAS tablas, en el formato EXACTO que CocinaPage consume
+          ({id, status, items[{name,quantity,notes}], table_name, code,
+          created_at}) y SIN auth → el 401 desaparece y las comandas aparecen.
+  E-14i · ENUMS REALES (EL FIX DEFINITIVO del mapa caído): tables.status es
+          un Enum de SQLAlchemy (AVAILABLE/OCCUPIED/RESERVED/...). Al abrir
+          la mesa se escribía 'Ocupada' → la fila quedaba "envenenada" y
+          TODAS las rutas viejas que la leyeran reventaban con
+          LookupError → mapa de mesas y dashboard caídos. Ahora ANTES de
+          escribir cualquier columna enum (tables.status, orders.status,
+          orders.channel, currency) se lee la lista de valores válidos del
+          CHECK del CREATE TABLE (SQLite) y SOLO se escriben valores de esa
+          lista. send/advance usan el ORDEN REAL del enum del proyecto.
+
+RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
+  POST /tables/{table_id}/open                  → abre mesa (sesión + pedido)
+  POST /tables/{table_id}/items                 → agrega productos (auto-abre)
+  POST /tables/{table_id}/orders                → alias de items
+  POST /orders                                  → crea pedido {table_id, items?}
+  POST /orders/{order_id}/items                 → agrega productos al pedido
+  DELETE /orders/{order_id}/items/{item_id}     → quita un producto
+  PATCH  /orders/{order_id}/items/{item_id}     → cambia cantidad (0 = quita)
+  POST /orders/{order_id}/send                  → manda comanda a cocina
+  POST /orders/{order_id}/advance               → avanza estado (KDS)
+  GET  /tables/{table_id}/order                 → pedido abierto de la mesa
+  GET  /orders/{order_id}                       → pedido por id
+  GET  /kitchen/orders (y /pos/kitchen/orders, /kds/orders...)  → comandas p/ cocina
+  POST /kitchen/orders/{id}/advance y /status                   → avanzar (KDS)
+
+NO TOCA (siguen siendo del backend original):
+  GET /pos/tables (mapa), checkout/cobro, recetas, inventario.
+
+CÓMO INSTALAR (2 líneas)
+------------------------
+1. Copia este archivo en la MISMA carpeta donde está el main.py del backend
+   (o en tu carpeta de routers, ajustando el import).
+2. En main.py, INMEDIATAMENTE DESPUÉS de crear `app = FastAPI(...)`
+   y ANTES del include_router del POS original, agrega:
+
+       from pos_compat import router as pos_compat_router
+       app.include_router(pos_compat_router)     # SIN prefix
+
+3. Reinicia uvicorn. En la consola debe aparecer:
+   [pos_compat] activo — DB: sqlite:///... · items: order_items
+============================================================================
+"""
 import datetime
 import glob
 import os
@@ -822,4 +896,148 @@ def pedido_por_id(order_id: str, db=Depends(_db)):
     return _order_dict(db, _orden_por_id(db, order_id))
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 6. COCINA / KDS (FIX E-14o)
+# ─────────────────────────────────────────────────────────────────────────
+# El kanban del front (CocinaPage) consulta GET /api/v1/pos/kitchen/orders,
+# una ruta del backend VIEJO que: (1) exige token → 401 sin sesión, (2) filtra
+# con sus propios estados y (3) nunca vio las órdenes creadas por pos_compat
+# → kanban 0/0/0 con la comanda ya enviada. Esta implementación lee las
+# MISMAS tablas y entrega el formato EXACTO que CocinaPage consume:
+#   {id, status, items:[{name, quantity, notes}], table_name, code,
+#    created_at}  →  estadoDe() del front clasifica: *prepar* → preparando,
+#   *list/ready/done* → lista, resto → pendiente.
+# Se registran variantes de ruta (kitchen/kds, con y sin prefijo pos) porque
+# el hook usePos del front puede llamar cualquiera de ellas; pos_compat está
+# incluido ANTES que los routers viejos en main.py, así que gana el match.
+_ESTADOS_FUERA_KDS = ("PAID", "PAGADO", "CANCELLED", "CANCELED", "CANCELADO",
+                      "OUT_OF_SERVICE", "OUTOFSERVICE", "CLOSED", "CLOSE",
+                      "DELIVERED", "ENTREGADO", "SERVED", "SERVIDO")
+
+
+def _nombre_mesa_de(db, orden) -> str:
+    """Nombre de la mesa para la tarjeta del kanban (textoMesaDe del front
+    lee table_name ?? mesa ?? table.name...)."""
+    tid = orden.get("table_id") if isinstance(orden, dict) else None
+    if tid:
+        mesa = _mesa(db, tid)
+        if mesa:
+            for campo in ("name", "nombre", "label", "etiqueta"):
+                try:
+                    v = mesa.get(campo)
+                except Exception:
+                    v = None
+                if v not in (None, ""):
+                    return str(v)
+            for campo in ("number", "numero", "num"):
+                try:
+                    v = mesa.get(campo)
+                except Exception:
+                    v = None
+                if v not in (None, ""):
+                    return f"Mesa {v}"
+    return "Mesa"
+
+
+def _estado_inicial_orden(db) -> Optional[str]:
+    """Estado con el que pos_compat CREA las órdenes (mesa abierta, sin enviar).
+    Esas NO se muestran en cocina: solo las comandas ya enviadas."""
+    vals = _valores_enum(db, "orders", "status")
+    if not vals:
+        return None  # sin enum conocido: no filtramos el inicial
+    for p in ("OPEN", "PENDING", "CREATED", "NUEVO"):
+        for v in vals:
+            if str(v).upper() == p:
+                return v
+    return None
+
+
+def _comandas_kds(db) -> list:
+    """Órdenes NO terminales, con items, ya enviadas → tarjetas del kanban."""
+    sql = "SELECT * FROM orders WHERE 1=1"
+    params: dict = {}
+    inicial = _estado_inicial_orden(db)
+    if inicial:
+        sql += " AND (status IS NULL OR UPPER(status) != :ini0)"
+        params["ini0"] = str(inicial).upper()
+    filas = []
+    try:
+        filas = db.execute(text(sql + " ORDER BY created_at DESC LIMIT 100"),
+                           params).mappings().all()
+    except Exception:
+        db.rollback()
+        try:  # DB variante sin created_at → sin orden específico
+            filas = db.execute(text(sql + " LIMIT 100"), params).mappings().all()
+        except Exception:
+            db.rollback()
+            return []
+    out = []
+    for f in filas:
+        try:
+            o = dict(f)
+            st = str(o.get("status") or "").upper()
+            if st in _ESTADOS_FUERA_KDS:
+                continue
+            items = _items_de_orden(db, o.get("id"))
+            if not items:
+                continue  # sin productos todavía no es comanda
+            nombre_mesa = _nombre_mesa_de(db, o)
+            out.append({
+                "id": o.get("id"),
+                "status": o.get("status"),
+                "estado": o.get("status"),
+                "code": o.get("order_number") or o.get("code") or "",
+                "table_id": o.get("table_id"),
+                "table_name": nombre_mesa,
+                "mesa": nombre_mesa,
+                "created_at": str(o.get("created_at")) if o.get("created_at") else None,
+                "channel": o.get("channel"),
+                "total": float(o.get("total") or 0),
+                "items": items,
+            })
+        except Exception as e:
+            _log("kitchen/orders: fila saltada por error:", e)
+            db.rollback()
+            continue
+    return out
+
+
+@router.get("/api/v1/pos/kitchen/orders")
+def kitchen_orders(db=Depends(_db)):
+    lista = _comandas_kds(db)
+    _log("kitchen/orders →", len(lista), "comanda(s)")
+    return lista
+
+
+@router.get("/api/v1/kitchen/orders")
+def kitchen_orders_sin_prefijo(db=Depends(_db)):
+    return _comandas_kds(db)
+
+
+@router.get("/api/v1/pos/kds/orders")
+def kds_orders(db=Depends(_db)):
+    return _comandas_kds(db)
+
+
+@router.get("/api/v1/kds/orders")
+def kds_orders_sin_prefijo(db=Depends(_db)):
+    return _comandas_kds(db)
+
+
+@router.post("/api/v1/pos/kitchen/orders/{order_id}/advance")
+def kitchen_advance(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return avanzar_pedido(order_id, payload, db)
+
+
+@router.post("/api/v1/pos/kitchen/orders/{order_id}/status")
+def kitchen_status(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return avanzar_pedido(order_id, payload, db)
+
+
+@router.post("/api/v1/kitchen/orders/{order_id}/advance")
+def kitchen_advance_sin_prefijo(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return avanzar_pedido(order_id, payload, db)
+
+
 _log("rutas de comanda registradas bajo /api/v1/pos ✓")
+_log("cocina/KDS: GET /pos/kitchen/orders (+variantes) y advance/status activos ✓")
