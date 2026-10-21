@@ -952,6 +952,16 @@ def _estado_inicial_orden(db) -> Optional[str]:
     return None
 
 
+def _iso_de(v) -> Optional[str]:
+    """created_at → texto ISO ('T' en vez de espacio) para que new Date() del
+    front lo parsee bien en todos los navegadores (el kanban calcula los
+    minutos transcurridos desde esa fecha)."""
+    if not v:
+        return None
+    s = str(v)
+    return s.replace(" ", "T") if (" " in s and "T" not in s) else s
+
+
 def _comandas_kds(db) -> list:
     """Órdenes NO terminales, con items, ya enviadas → tarjetas del kanban."""
     sql = "SELECT * FROM orders WHERE 1=1"
@@ -990,7 +1000,7 @@ def _comandas_kds(db) -> list:
                 "table_id": o.get("table_id"),
                 "table_name": nombre_mesa,
                 "mesa": nombre_mesa,
-                "created_at": str(o.get("created_at")) if o.get("created_at") else None,
+                "created_at": _iso_de(o.get("created_at")),
                 "channel": o.get("channel"),
                 "total": float(o.get("total") or 0),
                 "items": items,
@@ -1021,6 +1031,16 @@ def kds_orders(db=Depends(_db)):
 
 @router.get("/api/v1/kds/orders")
 def kds_orders_sin_prefijo(db=Depends(_db)):
+    return _comandas_kds(db)
+
+
+@router.get("/api/v1/comandas")
+def comandas_alias(db=Depends(_db)):
+    return _comandas_kds(db)
+
+
+@router.get("/api/v1/pos/comandas")
+def pos_comandas_alias(db=Depends(_db)):
     return _comandas_kds(db)
 
 
