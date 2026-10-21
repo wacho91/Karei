@@ -1059,5 +1059,60 @@ def kitchen_advance_sin_prefijo(order_id: str, payload: Any = Body(None), db=Dep
     return avanzar_pedido(order_id, payload, db)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 7. DIAGNÓSTICO KDS (FIX E-14o2) — ver DENTRO de la DB con una Execute
+# ─────────────────────────────────────────────────────────────────────────
+# GET /api/v1/pos/kitchen/debug (SOLO LECTURA) devuelve:
+#   ultimas_ordenes  → filas crudas de orders (id, status, mesa, fecha)
+#   total_items_*    → cuántas líneas de producto hay guardadas
+#   enum_orders_status / estado_inicial → cómo pos_compat filtra el kanban
+#   comandas_kds     → EXACTAMENTE lo que la ruta de cocina entregará
+#   columnas_orders / tabla_items / db → cómo quedó configurado el módulo
+# Con esto se ve en cuál eslabón se corta la cadena sin tocar nada.
+@router.get("/api/v1/pos/kitchen/debug")
+def kitchen_debug(db=Depends(_db)):
+    info: dict = {"_nota": "solo lectura · diagnostics KDS E-14o2"}
+    try:
+        info["db"] = DB_URL
+        info["tabla_items"] = _tabla_items(db)
+        info["cache"] = {k: str(v) for k, v in _CACHÉ.items()}
+        try:
+            info["enum_orders_status"] = _valores_enum(db, "orders", "status")
+        except Exception as e:
+            info["enum_orders_status"] = f"error: {e}"
+        try:
+            info["estado_inicial"] = _estado_inicial_orden(db)
+        except Exception as e:
+            info["estado_inicial"] = f"error: {e}"
+        info["columnas_orders"] = sorted(_columnas(db, "orders"))
+        filas = []
+        try:
+            filas = db.execute(text(
+                "SELECT id, status, table_id, order_number, created_at "
+                "FROM orders ORDER BY created_at DESC LIMIT 15")).mappings().all()
+        except Exception:
+            db.rollback()
+            try:
+                filas = db.execute(text("SELECT * FROM orders LIMIT 15")).mappings().all()
+            except Exception as e:
+                db.rollback()
+                info["error_ordenes"] = str(e)
+        info["ultimas_ordenes"] = [dict(f) for f in filas]
+        try:
+            n = db.execute(text(f"SELECT COUNT(*) FROM {info['tabla_items']}")).scalar()
+            info[f"total_items_en_{info['tabla_items']}"] = int(n or 0)
+        except Exception as e:
+            db.rollback()
+            info["total_items"] = f"error: {e}"
+        try:
+            info["comandas_kds"] = _comandas_kds(db)
+        except Exception as e:
+            db.rollback()
+            info["comandas_kds"] = f"error: {e}"
+        return info
+    except Exception as e:
+        return {"error": str(e)}
+
+
 _log("rutas de comanda registradas bajo /api/v1/pos ✓")
-_log("cocina/KDS: GET /pos/kitchen/orders (+variantes) y advance/status activos ✓")
+_log("cocina/KDS: GET /pos/kitchen/orders (+variantes), advance/status y /kitchen/debug activos ✓")
