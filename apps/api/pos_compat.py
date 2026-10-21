@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_compat.py (E-14q) — COMANDA + COCINA/KDS + ENTREGAR
-VERSION: E-14q-v1 · VERIFICA: la ÚLTIMA línea de este archivo es el banner "E-14q"
+Kārei · pos_compat.py (E-14s) — COMANDA + COCINA/KDS + ENTREGAR + DIAGNÓSTICO
+VERSION: E-14s-v1 · VERIFICA: la ÚLTIMA línea de este archivo es el banner "E-14s"
 ============================================================================
 QUÉ ES
 ------
@@ -919,16 +919,65 @@ def ajustar_item(order_id: str, item_id: str, payload: Any = Body(None), db=Depe
 
 @router.post("/api/v1/pos/orders/{order_id}/send")
 def enviar_comanda(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return _enviar(db, order_id, payload)
+
+
+def _valor_sent(db, orden):
+    """El valor EXACTO de 'enviado a cocina' según el enum real del proyecto."""
+    v = _estado_objetivo(db, "SENT")
+    if v:
+        return v
+    vals = _valores_enum(db, "orders", "status")
+    inicial = _estado_inicial_orden(db)
+    if vals and inicial:
+        for i, x in enumerate(vals):
+            if str(x).upper() == str(inicial).upper() and i + 1 < len(vals):
+                return vals[i + 1]
+    return _siguiente_estado_orden(db, orden["status"])
+
+
+def _enviar(db, order_id: str, payload: Any = None):
+    """FIX E-14s · send con SEMÁNTICA de comanda (no de avance ciego):
+    · OPEN (sin enviar)           → SENT (a cocina ✓)
+    · SENT / EN PREPARACIÓN / LISTA → SIN CAMBIO (un re-send o doble clic ya
+      NO salta dos columnas: antes cada send avanzaba un paso del ciclo).
+    · ENTREGADA (cuenta abierta)   → SENT (nueva ronda, ciclo reiniciado).
+    · Pedido VACÍO pero el body trae productos → se agregan aquí mismo
+      (rescata el caso 'falló el paso de ítems y el send sí pasó', que
+      dejaba comandas fantasma que el kanban no mostraba).
+    · Si AÚN así no hay ni un producto → 422 RUIDOSO (el toast del front
+      lo muestra, en vez de una comanda invisible)."""
     orden = _orden_por_id(db, order_id)
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
-    # FIX E-14i: estado siguiente según el enum REAL (antes 'SENT' fijo).
-    # FIX E-14q: si la cuenta ya fue ENTREGADA y sigue abierta (el comensal
-    # pide más), un nuevo send REINICIA el ciclo de comanda → SENT: así la
-    # nueva ronda vuelve a aparecer en el kanban y no queda congelada.
-    if str(orden["status"] or "").upper() in _ESTADOS_ENTREGA:
-        nuevo = _estado_objetivo(db, "SENT") or _siguiente_estado_orden(db, orden["status"])
+    actual = str(orden["status"] or "").upper()
+    items_body = _extraer_items(payload)
+    n_items = len(_items_de_orden(db, orden["id"]))
+    if items_body:
+        mesa = _mesa(db, orden["table_id"]) if orden.get("table_id") else None
+        _agregar_items(db, mesa, orden, items_body)
+        n_items += len(items_body)
+        _log("send: body trae", len(items_body), "producto(s) → agregados al pedido", orden["id"])
+    if n_items == 0:
+        raise HTTPException(422, "[pos_compat] No se puede ENVIAR a cocina un pedido SIN productos "
+                                 "(el paso de agregar ítems falló antes: mira F12 → Network)")
+    vals = [str(v).upper() for v in (_valores_enum(db, "orders", "status") or [])]
+    inicial = _estado_inicial_orden(db)
+    pos_actual = vals.index(actual) if actual in vals else -1
+    pos_inicial = vals.index(str(inicial).upper()) if (inicial and str(inicial).upper() in vals) else -1
+    pos_entrega = next((i for i, v in enumerate(vals) if v in _ESTADOS_ENTREGA), -1)
+    es_inicial = (bool(inicial) and actual == str(inicial).upper()) \
+        or actual in _SINONIMOS_ESTADO["OPEN"] or actual == ""
+    ya_en_cocina = (pos_inicial >= 0 and pos_entrega > pos_inicial
+                    and pos_inicial < pos_actual < pos_entrega)
+    if actual in _ESTADOS_ENTREGA:
+        nuevo = _valor_sent(db, orden)
         _log("send: cuenta entregada → nueva comanda (ciclo reiniciado)")
+    elif es_inicial:
+        nuevo = _valor_sent(db, orden)
+    elif ya_en_cocina:
+        _log("send: pedido", order_id, "ya está en", actual, "→ sin cambio (re-send no avanza)")
+        return _order_dict(db, orden)
     else:
         nuevo = _siguiente_estado_orden(db, orden["status"])
     db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
@@ -1050,34 +1099,43 @@ def _iso_de(v) -> Optional[str]:
 
 
 def _comandas_kds(db) -> list:
-    """Órdenes NO terminales, con items, ya enviadas → tarjetas del kanban."""
-    sql = "SELECT * FROM orders WHERE 1=1"
-    params: dict = {}
+    """FIX E-14s · Tarjetas del kanban. Reglas nuevas:
+    · Terminal (pagada/cancelada/entregada)        → NUNCA se muestra.
+    · CON productos (cualquier estado no terminal)  → SIEMPRE se muestra:
+      una comanda con productos que se quedó sin enviar ES 'Pendiente' y
+      NO puede desaparecer del radar de cocina (causa raíz de 'envío y
+      nunca llega': el filtro viejo escondía el estado inicial).
+    · SIN productos pero YA ENVIADA (estado avanzado) → se muestra con
+      items:[] para DELATAR en pantalla la comanda fantasma.
+    · Sin productos y sin enviar                     → no es comanda.
+    · created_at con respaldo (updated_at → ahora) para el contador de min."""
     inicial = _estado_inicial_orden(db)
-    if inicial:
-        sql += " AND (status IS NULL OR UPPER(status) != :ini0)"
-        params["ini0"] = str(inicial).upper()
     filas = []
     try:
-        filas = db.execute(text(sql + " ORDER BY created_at DESC LIMIT 100"),
-                           params).mappings().all()
+        filas = db.execute(text("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100")).mappings().all()
     except Exception:
         db.rollback()
         try:  # DB variante sin created_at → sin orden específico
-            filas = db.execute(text(sql + " LIMIT 100"), params).mappings().all()
+            filas = db.execute(text("SELECT * FROM orders LIMIT 100")).mappings().all()
         except Exception:
             db.rollback()
             return []
-    out = []
+    out, ocultas_terminal, ocultas_vacias = [], 0, 0
     for f in filas:
         try:
             o = dict(f)
             st = str(o.get("status") or "").upper()
             if st in _ESTADOS_FUERA_KDS:
+                ocultas_terminal += 1
                 continue
+            es_inicial = bool(inicial) and st == str(inicial).upper()
             items = _items_de_orden(db, o.get("id"))
+            if not items and es_inicial:
+                ocultas_vacias += 1
+                continue  # mesa abierta sin enviar ni un producto: no es comanda
             if not items:
-                continue  # sin productos todavía no es comanda
+                _log("kitchen/orders: ⚠ pedido", o.get("id"), "en estado", st,
+                     "SIN productos (comanda fantasma) → tarjeta visible para diagnosticar")
             nombre_mesa = _nombre_mesa_de(db, o)
             out.append({
                 "id": o.get("id"),
@@ -1087,7 +1145,7 @@ def _comandas_kds(db) -> list:
                 "table_id": o.get("table_id"),
                 "table_name": nombre_mesa,
                 "mesa": nombre_mesa,
-                "created_at": _iso_de(o.get("created_at")),
+                "created_at": _iso_de(o.get("created_at") or o.get("updated_at") or _now()),
                 "channel": o.get("channel"),
                 "total": float(o.get("total") or 0),
                 "items": items,
@@ -1096,6 +1154,8 @@ def _comandas_kds(db) -> list:
             _log("kitchen/orders: fila saltada por error:", e)
             db.rollback()
             continue
+    _log("kitchen/orders →", len(out), "comanda(s) · filas leídas", len(filas),
+         "· terminales ocultas", ocultas_terminal, "· vacías-sin-enviar ocultas", ocultas_vacias)
     return out
 
 
@@ -1159,6 +1219,110 @@ def kds_avance_variantes(order_id: str, payload: Any = Body(None), db=Depends(_d
     return avanzar_pedido(order_id, payload, db)
 
 
+# ── FIX E-14s: comandas/send en TODAS las rutas verosímiles + DEBUG ──
+# (1) send por MESA y por COLECCIÓN {table_id, items} por si el front usa
+#     otra ruta; (2) variantes de send por pedido (kitchen/kds); (3) un
+#     TABLERO de diagnóstico sin auth: abre
+#     http://localhost:8000/api/v1/pos/debug/tablero en el navegador y la
+#     verdad de la DB queda a la vista (órdenes, estados, nº de ítems).
+_KLAVES_ORDEN = ("order_id", "pedido_id", "id_pedido", "id_order")
+
+
+@router.post("/api/v1/pos/tables/{table_id}/send")
+@router.post("/api/v1/pos/tables/{table_id}/comanda")
+@router.post("/api/v1/pos/tables/{table_id}/orders/send")
+def enviar_mesa(table_id: str, payload: Any = Body(None), db=Depends(_db)):
+    mesa = _mesa(db, table_id)
+    if not mesa:
+        raise HTTPException(404, f"Mesa {table_id} no encontrada")
+    orden = _orden_abierta(db, table_id)
+    if not orden:
+        if _extraer_items(payload):  # abre y envía en un solo paso
+            sesion = _abrir_sesion(db, mesa, _extraer_guest_count(payload))
+            orden = _crear_orden(db, mesa, sesion)
+        else:
+            raise HTTPException(404, f"La mesa {table_id} no tiene pedido abierto")
+    return _enviar(db, orden["id"], payload)
+
+
+@router.post("/api/v1/pos/orders/{order_id}/comanda")
+@router.post("/api/v1/pos/kitchen/orders/{order_id}/send")
+@router.post("/api/v1/kitchen/orders/{order_id}/send")
+@router.post("/api/v1/kds/orders/{order_id}/send")
+@router.post("/api/v1/pos/kds/orders/{order_id}/send")
+def enviar_orden_variantes(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return _enviar(db, order_id, payload)
+
+
+@router.post("/api/v1/pos/comandas")
+@router.post("/api/v1/comandas")
+@router.post("/api/v1/pos/kitchen/comandas")
+@router.post("/api/v1/kitchen/comandas")
+@router.post("/api/v1/kds/comandas")
+def crear_y_enviar_comanda(payload: Any = Body(None), db=Depends(_db)):
+    """POST comandas: {table_id, items:[...]} (o {order_id, items}) →
+    asegura el pedido, agrega los productos y lo deja ENVIADO a cocina."""
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "[pos_compat] Body JSON esperado {table_id, items}")
+    bajo = {str(k).lower(): v for k, v in payload.items()}
+    order_id = next((str(bajo[k]) for k in _KLAVES_ORDEN if bajo.get(k)), None)
+    if order_id:
+        return _enviar(db, order_id, payload)
+    table_id = next((str(bajo[k]) for k in _SIN["table_id"] if bajo.get(k)), None)
+    if not table_id:
+        raise HTTPException(422, "[pos_compat] Falta table_id (u order_id) en el body")
+    mesa = _mesa(db, table_id)
+    if not mesa:
+        raise HTTPException(404, f"Mesa {table_id} no encontrada")
+    orden = _orden_abierta(db, table_id)
+    if not orden:
+        sesion = _abrir_sesion(db, mesa, _extraer_guest_count(payload))
+        orden = _crear_orden(db, mesa, sesion)
+    return _enviar(db, orden["id"], payload)
+
+
+@router.get("/api/v1/pos/debug/tablero")
+@router.get("/api/v1/pos/debug/orders")
+def debug_tablero(db=Depends(_db)):
+    """VERDAD DE LA DB SIN AUTH (E-14s): abre este endpoint en el navegador
+    y la captura muestra órdenes reales, estados y cuántos ítems tiene cada
+    una. Es el fin de las adivinanzas de diagnóstico."""
+    def _fila(o):
+        try:
+            return {"id": str(o.get("id"))[:10], "table_id": str(o.get("table_id"))[:10],
+                    "status": o.get("status"), "order_number": o.get("order_number"),
+                    "created_at": str(o.get("created_at")),
+                    "total": float(o.get("total") or 0),
+                    "n_items": len(_items_de_orden(db, o.get("id")))}
+        except Exception as e:
+            return {"error": str(e)}
+    filas = []
+    try:
+        filas = db.execute(text("SELECT * FROM orders ORDER BY created_at DESC LIMIT 30")).mappings().all()
+    except Exception:
+        db.rollback()
+        try:
+            filas = db.execute(text("SELECT * FROM orders LIMIT 30")).mappings().all()
+        except Exception:
+            db.rollback()
+    mesas = []
+    try:
+        for m in db.execute(text("SELECT * FROM tables LIMIT 20")).mappings().all():
+            md = dict(m)
+            mesas.append({"id": str(md.get("id"))[:10], "name": md.get("name") or md.get("nombre"),
+                          "status": md.get("status")})
+    except Exception:
+        db.rollback()
+    return {
+        "version": "E-14s",
+        "enum_status": _valores_enum(db, "orders", "status"),
+        "estado_inicial": _estado_inicial_orden(db),
+        "tabla_items": _tabla_items(db),
+        "mesas": mesas,
+        "ordenes": [_fila(o) for o in filas],
+    }
+
+
 # ── FIX E-14q: ENTREGAR ──────────────────────────────────────────────
 # El kanban marcaba la comanda LISTA y ahí quedaba: NO existía la ruta de
 # entrega. "Entregar" fija el estado de entrega del ENUM REAL del proyecto
@@ -1199,3 +1363,5 @@ def kitchen_deliver(order_id: str, payload: Any = Body(None), db=Depends(_db)):
 
 _log("rutas de comanda registradas bajo /api/v1/pos ✓")
 _log("E-14q: ENTREGAR → POST .../deliver activo · advance/status aceptan body ✓")
+_log("E-14s: send blindado (rescata items del body · re-send NO salta columnas · 422 si va vacía) "
+      "· kanban nunca oculta comandas con productos · DEBUG GET /api/v1/pos/debug/tablero ✓")
