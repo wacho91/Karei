@@ -1,63 +1,8 @@
-# -*- coding: utf-8 -*-
-"""
-============================================================================
-Kārei · pos_compat.py (E-14) — RUTAS DE COMANDA DEL POS, ROBUSTAS
-============================================================================
-QUÉ ES
-------
-Un router FastAPI AUTOCONTENIDO que implementa el flujo completo de la
-comanda sobre las tablas REALES del proyecto (tables, table_sessions,
-orders, recipes). Los endpoints son TOLERANTES: aceptan cuerpos en inglés
-o español, en array ({items:[...]}) o plano ({recipe_id, quantity}), y con
-sinónimos (recipe_id/receta_id/product_id, quantity/cantidad/qty...).
-El error 422 "field required" desaparece para siempre.
-
-FIXES INCLUIDOS
-  E-14e · driver async detectado (sqlite+aiosqlite) → engine sync (MissingGreenlet).
-  E-14f · ids aceptados con o sin guiones (front UUID vs DB hex).
-  E-14g · ORDER BY adaptado a las columnas REALES de order_items (su tabla
-          real NO tiene created_at: "no such column: created_at") +
-          nombre/precio completados desde recipes si la tabla no los guarda +
-          la PK de items puede llamarse distinto de "id" (item_id, uuid...).
-  E-14h · sesiones y pedidos se crean SIEMPRE con opened_by_id/waiter_id de
-          un usuario REAL de la DB (antes quedaban NULL y las rutas VIEJAS
-          del backend crasheaban al leer la relación del usuario → 500 sin
-          cabeceras CORS → el navegador lo muestra como "bloqueado por CORS").
-
-RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
-  POST /tables/{table_id}/open                  → abre mesa (sesión + pedido)
-  POST /tables/{table_id}/items                 → agrega productos (auto-abre)
-  POST /tables/{table_id}/orders                → alias de items
-  POST /orders                                  → crea pedido {table_id, items?}
-  POST /orders/{order_id}/items                 → agrega productos al pedido
-  DELETE /orders/{order_id}/items/{item_id}     → quita un producto
-  PATCH  /orders/{order_id}/items/{item_id}     → cambia cantidad (0 = quita)
-  POST /orders/{order_id}/send                  → manda comanda a cocina
-  POST /orders/{order_id}/advance               → avanza estado (KDS)
-  GET  /tables/{table_id}/order                 → pedido abierto de la mesa
-  GET  /orders/{order_id}                       → pedido por id
-
-NO TOCA (siguen siendo del backend original):
-  GET /pos/tables (mapa), GET /pos/kitchen/orders (cocina), checkout/cobro,
-  recetas, inventario.
-
-CÓMO INSTALAR (2 líneas)
-------------------------
-1. Copia este archivo en la MISMA carpeta donde está el main.py del backend
-   (o en tu carpeta de routers, ajustando el import).
-2. En main.py, INMEDIATAMENTE DESPUÉS de crear `app = FastAPI(...)`
-   y ANTES del include_router del POS original, agrega:
-
-       from pos_compat import router as pos_compat_router
-       app.include_router(pos_compat_router)     # SIN prefix
-
-3. Reinicia uvicorn. En la consola debe aparecer:
-   [pos_compat] activo — DB: sqlite:///... · items: order_items
-============================================================================
-"""
 import datetime
 import glob
 import os
+import re
+import sys
 import uuid
 from typing import Any, Optional
 
@@ -359,6 +304,126 @@ def _usuario_any(db) -> str:
     return uid
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# FIX E-14i: ENUMS REALES — nunca escribir un valor fuera del enum
+# ─────────────────────────────────────────────────────────────────────────
+# Las columnas de estado son Enum de SQLAlchemy. En SQLite el CREATE TABLE
+# lleva un CHECK (col IN ('A','B',...)) con los valores válidos. Si se
+# escribe otro valor (ej. 'Ocupada'), la fila queda envenenada: al LEERLA
+# el ORM lanza LookupError y TODAS las rutas viejas caen con 500.
+_VAL_ENUM: dict = {}
+_META_ENUM: dict = {}
+_META_ESCANEADO = {"hecho": False}
+_TERMINALES = ("PAID", "PAGADO", "CANCELLED", "CANCELED", "CANCELADO",
+               "OUT_OF_SERVICE", "OUTOFSERVICE", "CLOSED")
+
+
+def _escanear_metadata():
+    """UNA vez por proceso: recorre los modelos SQLAlchemy ya importados
+    (sys.modules) y guarda los valores válidos de TODAS las columnas Enum.
+    Se hace en la PRIMERA petición (los routers/modelos ya están cargados
+    para entonces). Es la fuente exacta que usa el ORM al leer filas."""
+    if _META_ESCANEADO["hecho"]:
+        return
+    _META_ESCANEADO["hecho"] = True
+    try:
+        import types as _types
+        from sqlalchemy import Enum as _SAEnum
+        from sqlalchemy.sql.schema import MetaData as _SAMeta
+        for _nombre, _mod in list(sys.modules.items()):
+            if not isinstance(_mod, _types.ModuleType):
+                continue
+            for _attr in ("Base", "base", "db", "Model", "metadata"):
+                try:
+                    _obj = getattr(_mod, _attr, None)
+                except Exception:
+                    continue
+                try:
+                    _md = _obj if isinstance(_obj, _SAMeta) else getattr(_obj, "metadata", None)
+                except Exception:
+                    continue
+                if not isinstance(_md, _SAMeta):
+                    continue
+                try:
+                    for _tname, _tabla in _md.tables.items():
+                        for _col in _tabla.columns:
+                            if isinstance(_col.type, _SAEnum):
+                                _META_ENUM[(str(_tname).lower(), str(_col.name).lower())] = \
+                                    list(_col.type.enums)
+                except Exception:
+                    continue
+        if _META_ENUM:
+            _log("enums leídos de los modelos del proyecto:",
+                 sorted(_META_ENUM.keys()))
+    except Exception as _e:
+        _log("escaneo de modelos sin resultado:", _e)
+
+
+def _valores_enum(db, tabla: str, columna: str) -> list:
+    """Valores válidos de una columna enum. FUENTES, en orden:
+    1. Los modelos SQLAlchemy del proyecto (escaneando sys.modules): es la
+       fuente EXACTA del ORM → col.type.enums.
+    2. El CHECK del CREATE TABLE en sqlite_master (enum nativo).
+    3. [] = sin restricción conocida (la columna se trata como VARCHAR libre)."""
+    clave = f"enum:{tabla}.{columna}"
+    if clave in _VAL_ENUM:
+        return _VAL_ENUM[clave]
+    _escanear_metadata()
+    vals: list = list(_META_ENUM.get((str(tabla).lower(), str(columna).lower()), []))
+    fuente = "modelos SQLAlchemy"
+    if not vals:
+        try:
+            ddl = db.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:t"),
+                             {"t": tabla}).scalar() or ""
+            pat = (rf"CHECK\s*\(\s*[\"'`\[]?(?:[A-Za-z_]\w*\.)?{columna}(?![\w])[\"'`\]]?"
+                   rf"\s+IN\s*\(([^)]*)\)")
+            m = re.search(pat, ddl, re.I | re.S)
+            if m:
+                vals = re.findall(r"'((?:[^']|'')*)'", m.group(1))
+                fuente = "CHECK del DDL"
+        except Exception:
+            vals = []
+    _VAL_ENUM[clave] = vals
+    if vals:
+        _log(f"enum {tabla}.{columna} [{fuente}]: {vals}")
+    return vals
+
+
+def _valor_enum(db, tabla: str, columna: str, preferidos: list, obligatorio: bool = False):
+    """Devuelve un valor VÁLIDO para la columna enum:
+    1. Sin CHECK conocido → preferidos[0] (columna libre, sin riesgo).
+    2. Busca los preferidos (mayúsc/minúsculas) entre los válidos.
+    3. obligatorio=True → primer valor no-terminal del enum.
+       obligatorio=False → None (el que llama se salta la escritura)."""
+    vals = _valores_enum(db, tabla, columna)
+    if not vals:
+        return preferidos[0]
+    for p in preferidos:
+        for v in vals:
+            if v.upper() == str(p).upper():
+                return v
+    if obligatorio:
+        no_terminal = [v for v in vals if v.upper() not in _TERMINALES]
+        return no_terminal[0] if no_terminal else vals[0]
+    return None
+
+
+def _siguiente_estado_orden(db, actual: str) -> str:
+    """Estado siguiente según el ORDEN DE DECLARACIÓN del enum REAL del
+    proyecto (saltando terminales). Sin enum → lista local ESTADOS_KDS."""
+    vals = _valores_enum(db, "orders", "status") or ESTADOS_KDS
+    norm = [str(v).upper() for v in vals]
+    try:
+        i = norm.index(str(actual).upper())
+    except ValueError:
+        no_terminal = [v for v in vals if str(v).upper() not in _TERMINALES]
+        return no_terminal[0] if no_terminal else (vals[0] if vals else "OPEN")
+    for v in vals[i + 1:]:
+        if str(v).upper() not in _TERMINALES:
+            return v
+    return actual
+
+
 def _mesa(db, table_id: str):
     limpio = _norm_id(table_id)
     m = db.execute(text("SELECT * FROM tables WHERE id IN (:a, :b)"),
@@ -430,7 +495,7 @@ def _abrir_sesion(db, mesa, guest_count: int):
         "status": "OPEN",
         "guest_count": guest_count,
         "opened_at": _now(),
-        "currency": "COP",
+        "currency": _valor_enum(db, "table_sessions", "currency", ["COP"], obligatorio=True),
         "subtotal_cents": 0, "discount_cents": 0, "tip_cents": 0,
         "tax_cents": 0, "total_cents": 0,
         "notes": None,
@@ -449,16 +514,22 @@ def _crear_orden(db, mesa, sesion) -> dict:
         "table_id": mesa["id"],
         "waiter_id": _usuario_any(db),
         "order_number": datetime.datetime.utcnow().strftime("ORD-%H%M%S"),
-        "channel": "POS",
-        "status": "OPEN",
+        "channel": _valor_enum(db, "orders", "channel", ["POS", "LOCAL", "MESON"],
+                               obligatorio=True),
+        "status": _valor_enum(db, "orders", "status",
+                              ["OPEN", "PENDING", "CREATED", "NUEVO"], obligatorio=True),
         "subtotal": 0.0, "tip": 0.0, "total": 0.0,
     })
     db.commit()
-    # mesa Ocupada (por si el mapa lee el campo directo)
+    # mesa Ocupada — FIX E-14i: SOLO con un valor VÁLIDO del enum real
+    # (antes escribía 'Ocupada' y envenenaba la fila → LookupError en el
+    # mapa de mesas y el dashboard). Si no se puede determinar, no escribe.
     try:
-        db.execute(text("UPDATE tables SET status = 'Ocupada', updated_at = :u WHERE id = :i"),
-                   {"u": _now(), "i": mesa["id"]})
-        db.commit()
+        ocupado = _valor_enum(db, "tables", "status", ["OCCUPIED", "OCUPADA", "BUSY"])
+        if ocupado:
+            db.execute(text("UPDATE tables SET status = :s, updated_at = :u WHERE id = :i"),
+                       {"s": ocupado, "u": _now(), "i": mesa["id"]})
+            db.commit()
     except Exception:
         db.rollback()
     return dict(_orden_abierta(db, mesa["id"]) or {"id": oid})
@@ -711,10 +782,12 @@ def enviar_comanda(order_id: str, payload: Any = Body(None), db=Depends(_db)):
     orden = _orden_por_id(db, order_id)
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
-    db.execute(text("UPDATE orders SET status = 'SENT', updated_at = :u WHERE id = :i"),
-               {"u": _now(), "i": orden["id"]})
+    # FIX E-14i: estado siguiente según el enum REAL (antes 'SENT' fijo)
+    nuevo = _siguiente_estado_orden(db, orden["status"])
+    db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
+               {"s": nuevo, "u": _now(), "i": orden["id"]})
     db.commit()
-    _log("send: pedido", order_id, "→ cocina ✓")
+    _log("send: pedido", order_id, orden["status"], "→", nuevo, "→ cocina ✓")
     return _order_dict(db, _orden_por_id(db, order_id))
 
 
@@ -724,10 +797,8 @@ def avanzar_pedido(order_id: str, payload: Any = Body(None), db=Depends(_db)):
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
     actual = orden["status"]
-    try:
-        siguiente = ESTADOS_KDS[ESTADOS_KDS.index(actual) + 1]
-    except (ValueError, IndexError):
-        siguiente = "DELIVERED" if actual != "PAID" else "PAID"
+    # FIX E-14i: estado siguiente según el ORDEN REAL del enum del proyecto
+    siguiente = _siguiente_estado_orden(db, actual)
     db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
                {"s": siguiente, "u": _now(), "i": orden["id"]})
     db.commit()
