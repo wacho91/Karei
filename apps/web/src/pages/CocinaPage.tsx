@@ -76,6 +76,17 @@ const bordePorEstado: Record<EstadoKds, string> = {
   lista: 'border-emerald-400/40',
 };
 
+// Rutas de avance; al ENTREGAR se intenta primero la ruta de entrega
+// (pos_compat E-14q) y luego las de avance de toda la vida.
+const rutasAvance = (id: string, esEntrega: boolean): string[] =>
+  esEntrega
+    ? [
+        `/pos/kitchen/orders/${id}/deliver`,
+        `/pos/kitchen/orders/${id}/advance`,
+        `/pos/kitchen/orders/${id}/status`,
+      ]
+    : [`/pos/kitchen/orders/${id}/advance`, `/pos/kitchen/orders/${id}/status`];
+
 function TarjetaComanda({
   comanda,
   avanzando,
@@ -83,7 +94,7 @@ function TarjetaComanda({
 }: {
   comanda: any;
   avanzando: boolean;
-  onAvanzar: (id: string) => void;
+  onAvanzar: (id: string, esEntrega?: boolean) => void;
 }) {
   const estado = estadoDe(comanda);
   const minutos = minutosDe(comanda);
@@ -149,9 +160,14 @@ function TarjetaComanda({
           {avanzando ? 'Actualizando…' : estado === 'pendiente' ? 'Iniciar preparación' : 'Marcar como lista'}
         </button>
       ) : (
-        <p className="mt-3 rounded-xl bg-emerald-400/10 px-3 py-2 text-center text-xs font-semibold text-emerald-300">
-          Lista para entregar
-        </p>
+        <button
+          type="button"
+          onClick={() => onAvanzar(String(comanda?.id ?? ''), true)}
+          disabled={avanzando || !comanda?.id}
+          className="mt-3 w-full rounded-xl bg-emerald-400 py-2.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {avanzando ? 'Actualizando…' : 'Entregar'}
+        </button>
       )}
     </div>
   );
@@ -178,21 +194,24 @@ export default function CocinaPage() {
     return () => clearTimeout(t);
   }, [aviso]);
 
-  const avanzar = async (id: string) => {
+  const avanzar = async (id: string, esEntrega = false) => {
     if (!id || avanzandoId) return;
     setAvanzandoId(id);
+    const rutas = rutasAvance(id, esEntrega);
     try {
+      let enviado = false;
+      // 1) Intento por el hook del proyecto (si existe)
       if (mutacionAvance?.mutateAsync) {
         try {
           await mutacionAvance.mutateAsync(id);
+          enviado = true;
         } catch {
-          // Si el hook espera otro formato, intentamos la ruta directa
-          await api.post(`/pos/kitchen/orders/${id}/advance`, {});
+          enviado = false; // cae al plan B de rutas directas
         }
-      } else {
-        const rutas = [`/pos/kitchen/orders/${id}/advance`, `/pos/kitchen/orders/${id}/status`];
+      }
+      // 2) Plan B: cadena de rutas directas (deliver → advance → status)
+      if (!enviado) {
         let ultimo: any = null;
-        let enviado = false;
         for (const ruta of rutas) {
           try {
             await api.post(ruta, {});
@@ -204,10 +223,13 @@ export default function CocinaPage() {
             if (st !== 404 && st !== 405) throw e;
           }
         }
-        if (!enviado) throw ultimo ?? new Error('No se pudo avanzar la comanda');
+        if (!enviado) throw ultimo ?? new Error('No se pudo actualizar la comanda');
       }
       await queryClient.invalidateQueries();
-      setAviso({ tipo: 'ok', texto: 'Comanda actualizada.' });
+      setAviso({
+        tipo: 'ok',
+        texto: esEntrega ? 'Comanda entregada al mesero.' : 'Comanda actualizada.',
+      });
     } catch (e: any) {
       const detalle = e?.response?.data?.detail;
       setAviso({
