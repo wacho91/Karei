@@ -3,6 +3,9 @@
 ============================================================================
 Kārei · pos_compat.py (E-14) — RUTAS DE COMANDA DEL POS, ROBUSTAS
 ============================================================================
+VERSION: E-14o-v3 · incluye COCINA/KDS (/kitchen/orders + advance + debug)
+VERIFICA: la ÚLTIMA línea de este archivo debe ser el _log("cocina/KDS: ...")
+============================================================================
 QUÉ ES
 ------
 Un router FastAPI AUTOCONTENIDO que implementa el flujo completo de la
