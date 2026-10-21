@@ -3,7 +3,7 @@
 ============================================================================
 Kārei · pos_compat.py (E-14) — RUTAS DE COMANDA DEL POS, ROBUSTAS
 ============================================================================
-VERSION: E-14o-v3 · incluye COCINA/KDS (/kitchen/orders + advance + debug)
+VERSION: E-14q-v4 · cocina/KDS + ENTREGAR (deliver/serve/complete) + debug
 VERIFICA: la ÚLTIMA línea de este archivo debe ser el _log("cocina/KDS: ...")
 ============================================================================
 QUÉ ES
@@ -517,10 +517,22 @@ def _sesion_abierta(db, table_id: str):
 
 
 def _orden_abierta(db, table_id: str):
-    return db.execute(text("SELECT * FROM orders WHERE table_id IN (:a, :b) "
-                           "AND status NOT IN ('PAID','CANCELLED') "
-                           "ORDER BY created_at DESC LIMIT 1"),
-                      {"a": str(table_id), "b": _norm_id(table_id)}).mappings().first()
+    """FIX E-14q: una orden ENTREGADA (DELIVERED/SERVED/...) ya NO es 'abierta':
+    si el mesero suma otra ronda después de entregar, se crea una orden NUEVA
+    → nueva comanda que la cocina SÍ ve (antes se reutilizaba la entregada y
+    un nuevo send no avanzaba a ningún lado). PAID/CANCELLED siguen excluidos."""
+    fuera = ["PAID", "CANCELLED", "CANCELED", "CANCELADO"]
+    for v in (_valores_enum(db, "orders", "status") or []):
+        u = str(v).upper()
+        if u in _VALORES_ENTREGA and u not in fuera:
+            fuera.append(u)
+    marcas = ", ".join(f":x{i}" for i in range(len(fuera)))
+    params = {f"x{i}": e for i, e in enumerate(fuera)}
+    params["a"] = str(table_id)
+    params["b"] = _norm_id(table_id)
+    return db.execute(text(f"SELECT * FROM orders WHERE table_id IN (:a, :b) "
+                           f"AND UPPER(status) NOT IN ({marcas}) "
+                           f"ORDER BY created_at DESC LIMIT 1"), params).mappings().first()
 
 
 def _insertar(db, tabla: str, valores: dict):
@@ -874,8 +886,25 @@ def avanzar_pedido(order_id: str, payload: Any = Body(None), db=Depends(_db)):
     if not orden:
         raise HTTPException(404, f"Pedido {order_id} no encontrado")
     actual = orden["status"]
-    # FIX E-14i: estado siguiente según el ORDEN REAL del enum del proyecto
-    siguiente = _siguiente_estado_orden(db, actual)
+    # FIX E-14q: si el body pide un estado EXPLÍCITO (status/estado) y es
+    # válido en el enum real, se escribe ESE; si no, estado siguiente (E-14i)
+    pedido = None
+    if isinstance(payload, dict):
+        bajo = {k.lower(): v for k, v in payload.items()}
+        for a in ("status", "estado", "nuevo_estado"):
+            if a in bajo and bajo[a]:
+                pedido = str(bajo[a])
+                break
+    if pedido:
+        vals = _valores_enum(db, "orders", "status") or []
+        valido = next((v for v in vals if str(v).upper() == pedido.upper()), None)
+        if vals and not valido:
+            raise HTTPException(422,
+                                f"[pos_compat] Estado '{pedido}' no es válido para orders.status. "
+                                f"Válidos: {vals}")
+        siguiente = valido or pedido
+    else:
+        siguiente = _siguiente_estado_orden(db, actual)
     db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
                {"s": siguiente, "u": _now(), "i": orden["id"]})
     db.commit()
@@ -1062,6 +1091,80 @@ def kitchen_advance_sin_prefijo(order_id: str, payload: Any = Body(None), db=Dep
     return avanzar_pedido(order_id, payload, db)
 
 
+# ── FIX E-14q: ENTREGAR la comanda (botón final "Lista para entregar") ────
+# El kanban avanza bien hasta Listas, pero el botón de ENTREGAR puede llamar
+# deliver/delivered/serve/served/complete/entregar, un PATCH con {status}
+# o incluso DELETE de la comanda. El backend viejo no tiene esas rutas →
+# el botón "no se puede". Aquí se cubren TODAS: buscan un estado de
+# ENTREGA en el enum REAL (DELIVERED/SERVED/ENTREGADO/SERVIDO), lo escriben
+# y la comanda sale del kanban (esos estados están fuera del KDS).
+_VALORES_ENTREGA = ("DELIVERED", "SERVED", "ENTREGADO", "ENTREGADA", "SERVIDO")
+
+
+def _entregar_comanda(db, order_id: str):
+    orden = _orden_por_id(db, order_id)
+    if not orden:
+        raise HTTPException(404, f"Pedido {order_id} no encontrado")
+    actual = orden["status"]
+    vals = _valores_enum(db, "orders", "status") or []
+    entrega = None
+    for objetivo in _VALORES_ENTREGA:
+        for v in vals:
+            if str(v).upper() == objetivo:
+                entrega = v
+                break
+        if entrega:
+            break
+    if not entrega:
+        entrega = _siguiente_estado_orden(db, actual)
+    if str(entrega).upper() == str(actual).upper():
+        _log("entregar:", order_id, "ya está en", actual,
+             "· el enum no tiene estado de entrega → no cambio nada")
+    else:
+        db.execute(text("UPDATE orders SET status = :s, updated_at = :u WHERE id = :i"),
+                   {"s": entrega, "u": _now(), "i": orden["id"]})
+        db.commit()
+        _log("entregar: comanda", order_id, actual, "→", entrega, "✓")
+    return _order_dict(db, _orden_por_id(db, order_id))
+
+
+def _registrar_rutas_entrega():
+    rutas = (
+        "/api/v1/pos/kitchen/orders/{order_id}/deliver",
+        "/api/v1/pos/kitchen/orders/{order_id}/delivered",
+        "/api/v1/pos/kitchen/orders/{order_id}/serve",
+        "/api/v1/pos/kitchen/orders/{order_id}/served",
+        "/api/v1/pos/kitchen/orders/{order_id}/complete",
+        "/api/v1/pos/kitchen/orders/{order_id}/entregar",
+        "/api/v1/kitchen/orders/{order_id}/deliver",
+        "/api/v1/pos/orders/{order_id}/deliver",
+        "/api/v1/pos/orders/{order_id}/serve",
+    )
+    for i, ruta in enumerate(rutas):
+        def _handler(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+            return _entregar_comanda(db, order_id)
+        _handler.__name__ = f"entregar_comanda_{i}"
+        router.add_api_route(ruta, _handler, methods=["POST"])
+
+
+_registrar_rutas_entrega()
+
+
+@router.patch("/api/v1/pos/kitchen/orders/{order_id}")
+def kitchen_patch_comanda(order_id: str, payload: Any = Body(None), db=Depends(_db)):
+    return avanzar_pedido(order_id, payload, db)
+
+
+@router.delete("/api/v1/pos/kitchen/orders/{order_id}")
+def kitchen_borrar_comanda(order_id: str, db=Depends(_db)):
+    return _entregar_comanda(db, order_id)
+
+
+@router.delete("/api/v1/kitchen/orders/{order_id}")
+def kitchen_borrar_comanda_sin_prefijo(order_id: str, db=Depends(_db)):
+    return _entregar_comanda(db, order_id)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 7. DIAGNÓSTICO KDS (FIX E-14o2) — ver DENTRO de la DB con una Execute
 # ─────────────────────────────────────────────────────────────────────────
@@ -1118,4 +1221,4 @@ def kitchen_debug(db=Depends(_db)):
 
 
 _log("rutas de comanda registradas bajo /api/v1/pos ✓")
-_log("cocina/KDS: GET /pos/kitchen/orders (+variantes), advance/status y /kitchen/debug activos ✓")
+_log("cocina/KDS: kitchen/orders + advance/status + ENTREGAR (deliver/serve/complete/entregar, PATCH, DELETE) + /kitchen/debug activos ✓")
