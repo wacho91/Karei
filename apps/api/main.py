@@ -21,10 +21,12 @@ async def lifespan(app: FastAPI):
             await conn.execute(text("ALTER TABLE users ADD COLUMN pin_hash TEXT"))
         except Exception:
             pass  # la columna ya existe
-                # Columna notes en order_items (especificaciones de la comanda)
+        # Columna notes en order_items (especificaciones de la comanda)
+        # ★ FIX E-14t2: falta el `await` — un engine async no acepta `with`
+        #   síncrono, la excepción se tragaba y la migración nunca corría.
         try:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE order_items ADD COLUMN notes VARCHAR(255)"))
+            await conn.execute(
+                text("ALTER TABLE order_items ADD COLUMN notes VARCHAR(255)"))
         except Exception:
             pass
 
@@ -43,6 +45,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── pos_compat (comanda + cocina/kanban + entregar) ──────────────────────
 try:
     from app.pos_compat import router as pos_compat_router
 except ImportError:
@@ -51,6 +54,21 @@ except ImportError:
     except ImportError:
         from apps.api.pos_compat import router as pos_compat_router
 app.include_router(pos_compat_router)
+
+# ── ★ NUEVO E-14t2: pos_cuenta_live (CUENTA DE MESA EN VIVO) ─────────────
+# Es la ruta que consulta PanelCuenta.tsx cada 8 s:
+#     GET /api/v1/pos/tables/{id}/cuenta  (+ variantes bill/cuenta)
+# Va ANTES de los routers viejos para ganar cualquier choque de rutas.
+# El archivo pos_cuenta_live.py va en la MISMA carpeta donde está tu
+# pos_compat.py (el try/except cubre app/, raíz y apps/api/).
+try:
+    from app.pos_cuenta_live import router as pos_cuenta_live_router
+except ImportError:
+    try:
+        from pos_cuenta_live import router as pos_cuenta_live_router
+    except ImportError:
+        from apps.api.pos_cuenta_live import router as pos_cuenta_live_router
+app.include_router(pos_cuenta_live_router)
 
 app.add_middleware(
     CORSMiddleware,
