@@ -1,6 +1,16 @@
 // Kārei · PanelPagosMetodo.tsx (E-14u) — REPORTES DE PAGO POR MÉTODO
-// Dashboard: cuánta plata entró en efectivo, tarjeta/transferencia y Nequi.
-// Consulta GET /pos/reportes/pagos cada 15 s. Sin dependencias nuevas.
+// ----------------------------------------------------------------------------
+// QUÉ RESUELVE: Cristian quiere ver en el DASHBOARD cuánta plata entró en
+// efectivo, cuánta por tarjeta/transferencia y cuánta por Nequi — para saber
+// cuánto dinero hay en caja y en las cuentas digitales.
+//
+// Consulta el add-on E-14u: GET /pos/reportes/pagos cada 15 SEGUNDOS.
+// Muestra: 3 tarjetas (Efectivo · Tarjeta/Transferencia · Nequi) con el
+// monto de HOY y nº de cobros, totales (hoy / 7 días / histórico) y la
+// lista de los últimos cobros con su hora, mesa, método y total.
+//
+// SIN dependencias nuevas: usa el mismo api de ../lib/api y react-query que
+// ya usa el resto del POS.
 import { useQuery } from '@tanstack/react-query';
 import * as apiModule from '../lib/api';
 
@@ -13,7 +23,15 @@ const dinero = (v: any): string => {
 
 const extraer = (res: any): any => res?.data ?? res;
 
-const METODOS_UI = [
+type MetodoUI = {
+  clave: string;
+  etiqueta: string;
+  icono: string;
+  borde: string;
+  texto: string;
+};
+
+const METODOS_UI: MetodoUI[] = [
   { clave: 'efectivo', etiqueta: 'Efectivo', icono: '💵', borde: 'border-emerald-500/40', texto: 'text-emerald-300' },
   { clave: 'tarjeta', etiqueta: 'Tarjeta · Transferencia', icono: '💳', borde: 'border-sky-500/40', texto: 'text-sky-300' },
   { clave: 'nequi', etiqueta: 'Nequi', icono: '📱', borde: 'border-violet-500/40', texto: 'text-violet-300' },
@@ -29,7 +47,7 @@ export default function PanelPagosMetodo({ className = '' }: { className?: strin
   const consulta = useQuery({
     queryKey: ['karei-pagos-metodo'],
     queryFn: async () => extraer(await api.get('/pos/reportes/pagos')),
-    refetchInterval: 15000,
+    refetchInterval: 15000, // se actualiza solo
     retry: 1,
   });
 
@@ -41,7 +59,7 @@ export default function PanelPagosMetodo({ className = '' }: { className?: strin
   const ultimos: any[] = Array.isArray(rep?.ultimos) ? rep.ultimos : [];
 
   return (
-    <section className={`rounded-2xl border border-slate-800 bg-slate-900/50 p-5 ${className}`}>
+    <section className={`bg-slate-800/50 border border-slate-700 p-6 rounded-xl shadow-sm ${className}`}>
       <header className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-base font-bold text-slate-100">Pagos por método</h2>
@@ -63,6 +81,7 @@ export default function PanelPagosMetodo({ className = '' }: { className?: strin
         </p>
       ) : (
         <>
+          {/* Tarjetas por método */}
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {METODOS_UI.map((m) => (
               <div key={m.clave} className={`rounded-xl border bg-slate-950/60 p-3 ${m.borde}`}>
@@ -86,6 +105,7 @@ export default function PanelPagosMetodo({ className = '' }: { className?: strin
             )}
           </div>
 
+          {/* Totales por periodo */}
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-2.5 text-xs">
             <span className="text-slate-400">
               Hoy: <b className="text-slate-100">{dinero(hoy?.total ?? 0)}</b>
@@ -100,6 +120,7 @@ export default function PanelPagosMetodo({ className = '' }: { className?: strin
             </span>
           </div>
 
+          {/* Últimos cobros */}
           <p className="mt-4 text-[11px] font-bold uppercase tracking-wide text-slate-500">
             Últimos cobros
           </p>

@@ -4,6 +4,7 @@ import { TopPlatos } from '@/components/dashboard/TopPlatos';
 import { useDashboard } from '@/hooks/useDashboard';
 import { useMesas } from '@/hooks/usePos';
 import { formatoCOP } from '@/lib/formato';
+import PanelPagosMetodo from './PanelPagosMetodo';
 
 export default function DashboardPage() {
   const { data, isLoading, isError, refetch } = useDashboard();
