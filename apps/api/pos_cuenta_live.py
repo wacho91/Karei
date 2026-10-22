@@ -570,3 +570,143 @@ def cuenta_de_mesa(table_id: str, db=Depends(_db)):
 
 _log("E-14t2: CUENTA DE MESA EN VIVO lista → GET /pos/tables/{id}/cuenta "
      "(y bill, con/sin /pos) · solo lectura · sin auth ✓")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 7. COBRAR CUENTA (E-14t3) — primer ladrillo de FACTURACIÓN
+# ─────────────────────────────────────────────────────────────────────────
+def _now() -> str:
+    return datetime.datetime.utcnow().isoformat(sep=" ", timespec="seconds")
+
+
+def _valor_pagado(db) -> Optional[str]:
+    """Valor TERMINAL de 'pagado' dentro del enum REAL de orders.status."""
+    vals = _valores_enum(db, "orders", "status")
+    if not vals:
+        return "PAID"  # columna libre: sin CHECK conocido
+    for sin in _SIN_PAGADO:
+        for v in vals:
+            if str(v).upper() == sin:
+                return v
+    return None
+
+
+@router.post("/api/v1/pos/tables/{table_id}/cobrar")
+@router.post("/api/v1/tables/{table_id}/cobrar")
+@router.post("/api/v1/pos/tables/{table_id}/pay")
+@router.post("/api/v1/tables/{table_id}/pay")
+def cobrar_cuenta(table_id: str, db=Depends(_db)):
+    # Cuerpo opcional (metodo de pago / propina): se ignora por ahora —
+    # la factura completa llega en la fase Facturación.
+    mesa = _mesa(db, table_id)
+    if not mesa:
+        raise HTTPException(404, f"Mesa {table_id} no encontrada")
+    mesa = dict(mesa)
+    try:
+        filas = db.execute(text("SELECT * FROM orders WHERE table_id IN (:a,:b)"),
+                           {"a": str(mesa["id"]), "b": _norm_id(mesa["id"])}).mappings().all()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        filas = []
+
+    pagado = _valor_pagado(db)
+    if not pagado:
+        raise HTTPException(
+            409, "El enum de orders.status no tiene ningún valor de 'pagado' "
+                 "(PAID/PAGADA/COBRADA/...). Mándame la lista de estados del enum.")
+    ahora = _now()
+    cols_o = _columnas(db, "orders")
+    n, total = 0, 0.0
+    for f in filas:
+        try:
+            o = dict(f)
+            st = str(o.get("status") or "").upper()
+            if any(x in st for x in _SIN_PAGADO) or any(x in st for x in _SIN_CANCELADO):
+                continue  # ya cobrada / anulada
+            try:
+                items = _items_de_orden(db, o.get("id"))
+            except Exception:
+                items = []
+            t = sum(int(i.get("quantity") or 1) * float(i.get("unit_price") or 0)
+                    for i in items)
+            total += t
+            datos = {"status": pagado, "updated_at": ahora}
+            if "total" in cols_o:
+                datos["total"] = t
+            if "subtotal" in cols_o:
+                datos["subtotal"] = t
+            for c in ("paid_at", "payment_at"):
+                if c in cols_o:
+                    datos[c] = ahora
+            sets = ", ".join(f"{k} = :{k}" for k in datos)
+            db.execute(text(f"UPDATE orders SET {sets} WHERE id = :i"),
+                       {**datos, "i": o["id"]})
+            n += 1
+        except Exception as e:
+            db.rollback()
+            _log("cobrar: orden saltada:", e)
+
+    if n == 0:
+        db.rollback()
+        raise HTTPException(422, "No hay pedidos abiertos para cobrar en esta mesa")
+    db.commit()
+    _log("cobrar:", n, "orden(es) →", pagado, "· total", total, "· mesa", mesa["id"])
+
+    # Cerrar sesión abierta (transacción INDEPENDIENTE: si falla, no toca el cobro)
+    try:
+        vals_s = _valores_enum(db, "table_sessions", "status")
+        cerrado = "CLOSED"
+        if vals_s:
+            cerrado = None
+            for sin in ("CLOSED", "CERRADA", "CERRADO", "FINISHED", "FINALIZADA"):
+                for v in vals_s:
+                    if str(v).upper() == sin:
+                        cerrado = v
+                        break
+                if cerrado:
+                    break
+        if cerrado:
+            cols_s = _columnas(db, "table_sessions")
+            with _engine.begin() as cx:
+                datos = {"s": cerrado, "a": str(mesa["id"]), "b": _norm_id(mesa["id"])}
+                sets = "status = :s"
+                if "closed_at" in cols_s:
+                    sets += ", closed_at = :ca"
+                    datos["ca"] = ahora
+                if "total_cents" in cols_s:
+                    sets += ", total_cents = :tc"
+                    datos["tc"] = int(round(total * 100))
+                cx.execute(text(f"UPDATE table_sessions SET {sets} "
+                                "WHERE table_id IN (:a,:b) "
+                                "AND status IN ('OPEN','ABIERTA','ABIERTO')"), datos)
+    except Exception as e:
+        _log("cobrar: sesión sin cerrar (no crítico):", e)
+
+    # Liberar mesa (transacción INDEPENDIENTE)
+    try:
+        vals_t = _valores_enum(db, "tables", "status")
+        libre = None
+        for sin in ("AVAILABLE", "LIBRE", "FREE", "DISPONIBLE"):
+            for v in vals_t:
+                if str(v).upper() == sin:
+                    libre = v
+                    break
+            if libre:
+                break
+        if libre:
+            with _engine.begin() as cx:
+                cx.execute(text("UPDATE tables SET status = :s, updated_at = :u "
+                                "WHERE id = :i"),
+                           {"s": libre, "u": ahora, "i": mesa["id"]})
+    except Exception as e:
+        _log("cobrar: mesa sin liberar (no crítico):", e)
+
+    return {"version": "E-14t2", "ok": True, "cobradas": n, "total": total,
+            "mesa_id": mesa["id"], "currency": "COP"}
+
+
+_log("E-14t2+E-14t3: COBRAR CUENTA listo → POST /pos/tables/{id}/cobrar "
+     "(y pay, con/sin /pos) · marca PAGADA + cierra sesión + libera mesa ✓")
