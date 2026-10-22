@@ -1,11 +1,20 @@
 // Kārei · PanelPago.tsx (E-14u) — COBRAR CON MÉTODO DE PAGO Y PROPINA
-// Al confirmar llama a la prop cobrar({ method, tip }) → el backend
-// registra el pago con su método y el dashboard lo desglosa.
+// ----------------------------------------------------------------------------
+// QUÉ RESUELVE: el panel viejo mostraba propina y método (Efectivo/Tarjeta/
+// Nequi) pero al confirmar ESOS DATOS SE PERDÍAN — llegaban al backend
+// vacíos y el cobro quedaba sin método (por eso el toast decía $16.000
+// cuando el total con propina era $17.600).
+//
+// Este panel al confirmar llama a la prop cobrar({ method, tip }) →
+// TablesPage v8 hace el POST y el add-on E-14u REGISTRA el pago con su
+// método en karei_payments → el dashboard lo desglosa.
+//
+// SIN dependencias nuevas.
 import { useMemo, useState } from 'react';
 
 type Props = {
   abierto?: boolean;
-  cuenta?: any;
+  cuenta?: any;            // cuenta en vivo del add-on (items, subtotal…)
   mesa?: any;
   mesaId?: any;
   cobrar?: (p: any) => any;
@@ -55,6 +64,7 @@ export default function PanelPago({
 
   const items = useMemo(() => itemsDe(cuenta), [cuenta]);
 
+  // Subtotal desde la cuenta EN VIVO; si no vino, se recalcula de los items.
   const subtotal = Number(cuenta?.subtotal ?? cuenta?.total ?? 0) ||
     items.reduce((s, it) => s + cantidadItem(it) * precioItem(it), 0);
   const propinaFinal = Math.round(subtotal * (pct / 100));
@@ -70,6 +80,8 @@ export default function PanelPago({
     if (!accion) return;
     setCobrandoLocal(true);
     try {
+      // E-14u: mandamos el método Y la propina (monto). Alias extra por si
+      // el backend usa otro nombre — el add-on acepta todos.
       await accion({
         method: metodo, payment_method: metodo, metodo_pago: metodo,
         tip: propinaFinal, propina: propinaFinal,
@@ -77,6 +89,7 @@ export default function PanelPago({
     } finally {
       setCobrandoLocal(false);
     }
+    // El modal lo cierra TablesPage cuando el POST responde (éxito o error).
   };
 
   if (!items.length) {
@@ -115,6 +128,7 @@ export default function PanelPago({
           </button>
         </header>
 
+        {/* Ítems de la cuenta (resumen) */}
         <div className="mt-4 max-h-44 space-y-1.5 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/60 p-3">
           {items.map((it: any, i: number) => (
             <div key={String(it?.id ?? it?.item_id ?? i)} className="flex items-baseline justify-between gap-2">
@@ -129,6 +143,7 @@ export default function PanelPago({
           ))}
         </div>
 
+        {/* Propina */}
         <p className="mt-4 text-[11px] font-bold uppercase tracking-wide text-slate-500">Propina</p>
         <div className="mt-1.5 grid grid-cols-3 gap-2">
           {PROPINAS.map((p) => (
@@ -147,6 +162,7 @@ export default function PanelPago({
           ))}
         </div>
 
+        {/* Método de pago */}
         <p className="mt-4 text-[11px] font-bold uppercase tracking-wide text-slate-500">Método de pago</p>
         <div className="mt-1.5 grid grid-cols-3 gap-2">
           {METODOS.map((m) => (
@@ -166,6 +182,7 @@ export default function PanelPago({
           ))}
         </div>
 
+        {/* Totales */}
         <div className="mt-4 space-y-1 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm">
           <div className="flex justify-between text-slate-400">
             <span>Subtotal</span><span className="font-semibold text-slate-200">{dinero(subtotal)}</span>
@@ -180,6 +197,7 @@ export default function PanelPago({
           </div>
         </div>
 
+        {/* Confirmar */}
         <button
           type="button"
           disabled={cobrando}
