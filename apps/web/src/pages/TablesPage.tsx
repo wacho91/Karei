@@ -1,10 +1,15 @@
-// src/pages/TablesPage.tsx — v7 · POS Comedor
+// src/pages/TablesPage.tsx — v8 · POS Comedor
+// E-14u: cobrarEnVivo ACEPTA el body del PanelPago ({ method, tip }) y lo
+//   manda al backend → el pago queda registrado con su método y propina
+//   (karei_payments) y el reporte del dashboard lo desglosa. Si el panel
+//   no manda nada, sigue funcionando igual que en v7 (efectivo · 0).
 // E-14t3: el botón Cobrar YA COBRA de verdad:
 //   1. PanelCuenta (en vivo) pasa la cuenta REAL al pulsar Cobrar → se guarda
 //      en estado y se le pasa a PanelPago (antes recibía pos.cuenta del hook
 //      viejo → null → "No hay cuenta abierta para cobrar").
 //   2. Al confirmar en el modal, se llama POST /pos/tables/{id}/cobrar del
 //      add-on: marca PAGADA, cierra sesión, libera la mesa y refresca todo.
+//   3. Fix del choque de nombres del v5 (el import nuevo ganaba) se mantiene.
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Hm from '../hooks/useMesas';
@@ -74,19 +79,23 @@ export default function TablesPage() {
     } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
   };
 
-  // COBRAR EN VIVO (E-14t3): POST /pos/tables/{id}/cobrar del add-on.
+  // COBRAR EN VIVO (E-14t3 + E-14u): POST /pos/tables/{id}/cobrar del add-on.
   // Marca PAGADA, cierra sesión, libera mesa → refresca mapa + cuenta.
-  const cobrarEnVivo = async () => {
+  // E-14u: acepta payload { method, tip } que viene del PanelPago.
+  const cobrarEnVivo = async (p?: any) => {
     if (!pos.mesaId || cobrando) return;
     setCobrando(true);
     try {
-      const r: any = await api.post(`/pos/tables/${pos.mesaId}/cobrar`, {});
+      const cuerpo = (p && typeof p === 'object' && !Array.isArray(p)) ? p : {};
+      const r: any = await api.post(`/pos/tables/${pos.mesaId}/cobrar`, cuerpo);
       const d = r?.data ?? r;
-      toastOk(`Cuenta cobrada · ${d?.cobradas ?? 1} pedido(s) · $${Number(d?.total ?? 0).toLocaleString('es-CO')}`);
+      const met: string = d?.metodo_etiqueta ?? d?.metodo ?? '';
+      toastOk(`Cuenta cobrada · ${d?.cobradas ?? 1} pedido(s) · $${Number(d?.total ?? 0).toLocaleString('es-CO')}${met ? ` · ${met}` : ''}`);
       setPagando(false);
       setCuentaParaPago(null);
       recargar(); // refresca el mapa (mesa libre)
       queryClient.invalidateQueries({ queryKey: ['karei-cuenta-mesa'] }); // cuenta → vacía
+      queryClient.invalidateQueries({ queryKey: ['karei-pagos-metodo'] }); // reporte del dashboard al instante
     } catch (e: any) {
       const det = e?.response?.data?.detail ?? e?.message ?? 'No se pudo cobrar la cuenta';
       alertaError(typeof det === 'string' ? det : 'No se pudo cobrar la cuenta');
