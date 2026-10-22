@@ -1,12 +1,12 @@
-// src/pages/TablesPage.tsx — v6 · POS Comedor
-// E-14t2: PanelCuenta EN VIVO conectado (consulta /pos/tables/{id}/cuenta cada
-// 8 s → la mesa ve sola lo que cocina entrega). Fix del choque de nombres:
-// antes había `import PanelCuenta` + `const PanelCuenta = mod(Pc,...)` a la
-// vez → el import nuevo se descartaba y ganaba el panel viejo ("Total $0").
-// Ahora el panel en vivo (src/pages/PanelCuenta.tsx) es el único.
-// E-10: cada bloque sigue dentro de CajaSegura; si algo falla verás una caja
-// roja con el motivo exacto (mandame esa captura).
+// src/pages/TablesPage.tsx — v7 · POS Comedor
+// E-14t3: el botón Cobrar YA COBRA de verdad:
+//   1. PanelCuenta (en vivo) pasa la cuenta REAL al pulsar Cobrar → se guarda
+//      en estado y se le pasa a PanelPago (antes recibía pos.cuenta del hook
+//      viejo → null → "No hay cuenta abierta para cobrar").
+//   2. Al confirmar en el modal, se llama POST /pos/tables/{id}/cobrar del
+//      add-on: marca PAGADA, cierra sesión, libera la mesa y refresca todo.
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import * as Hm from '../hooks/useMesas';
 import * as Hp from '../hooks/usePedido';
 import * as Mm from '../components/mesas/MapaMesas';
@@ -16,8 +16,11 @@ import * as Mn from '../components/mesas/ModalNuevaMesa';
 import * as Pp from '../components/mesas/PanelPago';
 import CajaSegura from '../components/mesas/CajaSegura';
 import PanelCuenta from './PanelCuenta';
+import * as apiModule from '../lib/api';
 import { diagnosticoPos } from '../lib/diagnosticoPos';
 import { toastOk, alertaError } from '../lib/alertas';
+
+const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
 const CajaNoDisponible = (n: string) => () => (
   <div className="m-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-300">
@@ -39,8 +42,11 @@ export default function TablesPage() {
   const ph: any = (Hp as any).usePedido ?? (Hp as any).default;
   const m: any = typeof mh === 'function' ? mh() : {};
   const pos: any = typeof ph === 'function' ? ph() : {};
+  const queryClient = useQueryClient();
   const [modalMesa, setModalMesa] = useState(false); // modal CERRADO por defecto
   const [pagando, setPagando] = useState(false);
+  const [cuentaParaPago, setCuentaParaPago] = useState<any>(null);
+  const [cobrando, setCobrando] = useState(false);
 
   const mesas: any[] = m.mesas ?? m.data ?? [];
   const recargar: () => any = m.recargar ?? m.cargar ?? (() => {});
@@ -66,6 +72,27 @@ export default function TablesPage() {
       const r: any = await crearDemo();
       toastOk(`Demo: ${r?.creadas ?? 0} creadas · ${r?.omitidas ?? 0} ya existían`); recargar();
     } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
+  };
+
+  // COBRAR EN VIVO (E-14t3): POST /pos/tables/{id}/cobrar del add-on.
+  // Marca PAGADA, cierra sesión, libera mesa → refresca mapa + cuenta.
+  const cobrarEnVivo = async () => {
+    if (!pos.mesaId || cobrando) return;
+    setCobrando(true);
+    try {
+      const r: any = await api.post(`/pos/tables/${pos.mesaId}/cobrar`, {});
+      const d = r?.data ?? r;
+      toastOk(`Cuenta cobrada · ${d?.cobradas ?? 1} pedido(s) · $${Number(d?.total ?? 0).toLocaleString('es-CO')}`);
+      setPagando(false);
+      setCuentaParaPago(null);
+      recargar(); // refresca el mapa (mesa libre)
+      queryClient.invalidateQueries({ queryKey: ['karei-cuenta-mesa'] }); // cuenta → vacía
+    } catch (e: any) {
+      const det = e?.response?.data?.detail ?? e?.message ?? 'No se pudo cobrar la cuenta';
+      alertaError(typeof det === 'string' ? det : 'No se pudo cobrar la cuenta');
+    } finally {
+      setCobrando(false);
+    }
   };
 
   const B: any = {
@@ -113,7 +140,7 @@ export default function TablesPage() {
               <PanelCuenta
                 mesaId={pos.mesaId ?? null}
                 mesaNombre={nombreMesa}
-                onCobrar={() => setPagando(true)}
+                onCobrar={(c: any) => { setCuentaParaPago(c); setPagando(true); }}
               />
             </CajaSegura>
             <CajaSegura nombre="Pedido (borrador)" key={`b-${llave}`}><PanelBorrador {...B} /></CajaSegura>
@@ -126,8 +153,10 @@ export default function TablesPage() {
           cerrar={() => setModalMesa(false)} onCrear={alCrear} crear={alCrear} />
       )}
       {pagando && (
-        <PanelPago mesa={mesaActual} mesaId={pos.mesaId} cuenta={pos.cuenta ?? null} abierto={true}
-          cobrar={pos.cobrar} onCobrar={pos.cobrar} pagar={pos.cobrar} onPagar={pos.cobrar}
+        <PanelPago mesa={mesaActual} mesaId={pos.mesaId}
+          cuenta={cuentaParaPago ?? pos.cuenta ?? null} abierto={true}
+          cobrar={cobrarEnVivo} onCobrar={cobrarEnVivo} pagar={cobrarEnVivo} onPagar={cobrarEnVivo}
+          cobrando={cobrando}
           onCerrar={() => setPagando(false)} cerrar={() => setPagando(false)}
           onExito={() => { setPagando(false); recargar(); }} trasCobrar={() => { setPagando(false); recargar(); }} />
       )}
