@@ -1,16 +1,21 @@
-// src/pages/TablesPage.tsx — v5 · POS Comedor
-// E-10: adiós pantalla blanca. Cada bloque va dentro de CajaSegura; si algo
-// falla verás una caja roja con el motivo exacto (mandame esa captura).
+// src/pages/TablesPage.tsx — v6 · POS Comedor
+// E-14t2: PanelCuenta EN VIVO conectado (consulta /pos/tables/{id}/cuenta cada
+// 8 s → la mesa ve sola lo que cocina entrega). Fix del choque de nombres:
+// antes había `import PanelCuenta` + `const PanelCuenta = mod(Pc,...)` a la
+// vez → el import nuevo se descartaba y ganaba el panel viejo ("Total $0").
+// Ahora el panel en vivo (src/pages/PanelCuenta.tsx) es el único.
+// E-10: cada bloque sigue dentro de CajaSegura; si algo falla verás una caja
+// roja con el motivo exacto (mandame esa captura).
 import { useState } from 'react';
 import * as Hm from '../hooks/useMesas';
 import * as Hp from '../hooks/usePedido';
 import * as Mm from '../components/mesas/MapaMesas';
-import * as Pc from '../components/mesas/PanelCuenta';
 import * as Pb from '../components/mesas/PanelBorrador';
 import * as Mr from '../components/mesas/MenuRapido';
 import * as Mn from '../components/mesas/ModalNuevaMesa';
 import * as Pp from '../components/mesas/PanelPago';
 import CajaSegura from '../components/mesas/CajaSegura';
+import PanelCuenta from './PanelCuenta';
 import { diagnosticoPos } from '../lib/diagnosticoPos';
 import { toastOk, alertaError } from '../lib/alertas';
 
@@ -24,7 +29,6 @@ const mod = (m: any, n: string): any =>
   : typeof m?.default === 'function' ? m.default
   : CajaNoDisponible(n);
 const MapaMesas = mod(Mm, 'MapaMesas');
-const PanelCuenta = mod(Pc, 'PanelCuenta');
 const PanelBorrador = mod(Pb, 'PanelBorrador');
 const MenuRapido = mod(Mr, 'MenuRapido');
 const ModalNuevaMesa = mod(Mn, 'ModalNuevaMesa');
@@ -44,7 +48,6 @@ export default function TablesPage() {
   const crearDemo: () => any = m.crearMesasDemo ?? m.crearDemo ?? m.crearMesas ?? (async () => {});
   const eliminarMesa = m.eliminarMesa ?? m.borrarMesa;
   const mesaActual = mesas.find((x: any) => String(x?.id) === String(pos.mesaId));
-  const cerrarMesa = pos.cerrar ?? pos.cerrarMesa ?? (() => pos.seleccionar?.(null));
 
   // Si el mapa manda la MESA completa, extraigo el id antes de guardar en el hook.
   const sel = (x: any) =>
@@ -65,13 +68,6 @@ export default function TablesPage() {
     } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
   };
 
-  const C: any = {
-    mesa: mesaActual, mesaId: pos.mesaId, cuenta: pos.cuenta ?? null, pedido: pos.cuenta ?? null,
-    sumarItem: pos.sumarItem, sumar: pos.sumarItem, restarItem: pos.restarItem, restar: pos.restarItem,
-    onCobrar: () => setPagando(true), alCobrar: () => setPagando(true),
-    cobrar: () => setPagando(true), iniciarPago: () => setPagando(true),
-    onCerrar: cerrarMesa, cerrar: cerrarMesa, alCerrar: cerrarMesa,
-  };
   const B: any = {
     borrador: pos.borrador ?? [], items: pos.borrador ?? [],
     ajustar: pos.ajustar, onAjustar: pos.ajustar, notaDe: pos.notaDe, nota: pos.notaDe,
@@ -87,6 +83,9 @@ export default function TablesPage() {
   };
   const abierto = pos.mesaId !== null && pos.mesaId !== undefined && pos.mesaId !== '';
   const llave = String(pos.mesaId);
+  const nombreMesa: string | undefined =
+    mesaActual?.nombre ?? mesaActual?.name ?? mesaActual?.label ??
+    (mesaActual?.code != null ? `Mesa ${mesaActual.code}` : undefined);
 
   return (
     <div className="p-4 space-y-4">
@@ -106,7 +105,17 @@ export default function TablesPage() {
         </div>
         {abierto && (
           <div className="w-full xl:w-[430px] space-y-4">
-            <CajaSegura nombre="Cuenta" key={`c-${llave}`}><PanelCuenta {...C} /></CajaSegura>
+            <button onClick={() => pos.seleccionar?.(null)}
+              className="text-xs font-semibold text-slate-400 hover:text-amber-300">
+              ← Volver al mapa de mesas
+            </button>
+            <CajaSegura nombre="Cuenta en vivo" key={`c-${llave}`}>
+              <PanelCuenta
+                mesaId={pos.mesaId ?? null}
+                mesaNombre={nombreMesa}
+                onCobrar={() => setPagando(true)}
+              />
+            </CajaSegura>
             <CajaSegura nombre="Pedido (borrador)" key={`b-${llave}`}><PanelBorrador {...B} /></CajaSegura>
             <CajaSegura nombre="Menú rápido" key={`m-${llave}`}><MenuRapido {...M} /></CajaSegura>
           </div>
