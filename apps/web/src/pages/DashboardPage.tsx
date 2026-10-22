@@ -45,6 +45,12 @@ export default function DashboardPage() {
         <KpiCard titulo="Utilidad Bruta Hoy" valor={formatoCOP(kpis.utilidad_bruta)} detalle={`Costo de ventas: ${formatoCOP(kpis.costo_ventas_hoy)}`} color="emerald" />
       </div>
 
+      {/* 💰 REPORTES DE PAGO POR MÉTODO (E-14u): cuánto entró en efectivo,
+          cuánto por tarjeta/transferencia y cuánto por Nequi — hoy, últimos
+          7 días e histórico + los últimos cobros. El bloque se trae TODO
+          solo (polling cada 15 s), no necesita props ni datos de arriba. */}
+      <PanelPagosMetodo className="mb-8" />
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
         {/* Ventas 7 días */}
         <div className="xl:col-span-2 bg-slate-800/50 border border-slate-700 p-6 rounded-xl shadow-sm">
