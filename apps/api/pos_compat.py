@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_compat.py (E-14s) — COMANDA + COCINA/KDS + ENTREGAR + DIAGNÓSTICO
-VERSION: E-14s-v1 · VERIFICA: la ÚLTIMA línea de este archivo es el banner "E-14s"
+Kārei · pos_compat.py (E-14t) — COMANDA + COCINA/KDS + ENTREGAR + CUENTA DE MESA
+VERSION: E-14t-v1 · VERIFICA: la ÚLTIMA línea de este archivo es el banner "E-14t"
 ============================================================================
 QUÉ ES
 ------
@@ -50,6 +50,19 @@ FIXES INCLUIDOS
           (GET /pos/tables) NO es este archivo: es el token vencido por tanto
           reinicio de uvicorn → cerrar sesión y volver a iniciar sesión
           (mismo caso de E-14f, misma solución).
+  E-14t · CUENTA DE MESA EN VIVO ("cocina entregó y la mesa nunca se enteró"):
+          el panel de la mesa mostraba "Cuenta abierta · Total $0" SIN productos
+          ni antes de enviar la comanda. Causa: la vista de cuenta consultaba
+          rutas del backend viejo que filtran por estado "abierto" exacto — al
+          enviar, el pedido pasa a SENT/IN_PREPARATION y para esa vista el
+          pedido "dejaba de existir"; lo ENTREGADO directamente desaparecía.
+          Ahora pos_compat sirve GET .../cuenta (y bill, con y sin /pos) con
+          TODOS los pedidos NO pagados de la mesa, items con aliases ES/EN,
+          estado_cocina por ítem (sin_enviar/en_cocina/preparando/listo/
+          entregado), total real y banderas hay_listos/hay_entregados.
+          SIN auth → se acabó el 401 en la cuenta. El front pinta el panel
+          con PanelCuenta.tsx (polling 8s): cuando cocina entrega, la mesa
+          LO VE sola.
 
 RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
   POST /tables/{table_id}/open                  → abre mesa (sesión + pedido)
@@ -62,6 +75,7 @@ RUTAS QUE IMPLEMENTA (todas bajo /api/v1/pos):
   POST /orders/{order_id}/send                  → manda comanda a cocina
   POST /orders/{order_id}/advance               → avanza estado (KDS)
   GET  /tables/{table_id}/order                 → pedido abierto de la mesa
+  GET  /tables/{table_id}/cuenta (y /bill, y sin /pos)  → CUENTA EN VIVO (E-14t)
   GET  /orders/{order_id}                       → pedido por id
   GET  /kitchen/orders (y /pos/kitchen/orders, /kds/orders...)  → comandas p/ cocina
   POST /kitchen/orders/{id}/advance y /status                   → avanzar (KDS)
@@ -401,8 +415,11 @@ def _usuario_any(db) -> str:
 _VAL_ENUM: dict = {}
 _META_ENUM: dict = {}
 _META_ESCANEADO = {"hecho": False}
-_TERMINALES = ("PAID", "PAGADO", "CANCELLED", "CANCELED", "CANCELADO",
-               "OUT_OF_SERVICE", "OUTOFSERVICE", "CLOSED")
+_TERMINALES = ("PAID", "PAGADO", "PAGADA", "COBRADO", "COBRADA", "CANCELLED",
+               "CANCELED", "CANCELADO", "CANCELADA", "ANULADO", "ANULADA",
+               "VOID", "VOIDED", "OUT_OF_SERVICE", "OUTOFSERVICE",
+               "CLOSED", "CLOSE", "CERRADO", "CERRADA",
+               "FACTURADA", "FACTURADO", "INVOICED")
 
 
 def _escanear_metadata():
@@ -580,10 +597,20 @@ def _sesion_abierta(db, table_id: str):
 
 
 def _orden_abierta(db, table_id: str):
-    return db.execute(text("SELECT * FROM orders WHERE table_id IN (:a, :b) "
-                           "AND status NOT IN ('PAID','CANCELLED') "
-                           "ORDER BY created_at DESC LIMIT 1"),
-                      {"a": str(table_id), "b": _norm_id(table_id)}).mappings().first()
+    # FIX E-14u: el filtro duro NOT IN ('PAID','CANCELLED') dejaba pasar
+    # órdenes PAGADA/ANULADA con enums ES → los items caían dentro de un
+    # pedido YA COBRADO y el cobro siguiente fallaba ("No hay pedidos
+    # abiertos"). Ahora se filtra en Python con los mismos sinónimos que
+    # usa la ruta de cobro (_SIN_PAGADO/_SIN_CANCELADO): EN y ES por igual.
+    filas = db.execute(text("SELECT * FROM orders WHERE table_id IN (:a, :b) "
+                            "ORDER BY created_at DESC LIMIT 20"),
+                       {"a": str(table_id), "b": _norm_id(table_id)}).mappings().all()
+    for f in filas:
+        st = str(dict(f).get("status") or "").upper()
+        if (not any(x in st for x in _SIN_PAGADO)
+                and not any(x in st for x in _SIN_CANCELADO)):
+            return f
+    return None
 
 
 def _insertar(db, tabla: str, valores: dict):
@@ -1046,9 +1073,13 @@ def pedido_por_id(order_id: str, db=Depends(_db)):
 # Se registran variantes de ruta (kitchen/kds, con y sin prefijo pos) porque
 # el hook usePos del front puede llamar cualquiera de ellas; pos_compat está
 # incluido ANTES que los routers viejos en main.py, así que gana el match.
-_ESTADOS_FUERA_KDS = ("PAID", "PAGADO", "CANCELLED", "CANCELED", "CANCELADO",
+_ESTADOS_FUERA_KDS = ("PAID", "PAGADO", "PAGADA", "COBRADO", "COBRADA",
+                      "CANCELLED", "CANCELED", "CANCELADO", "CANCELADA",
+                      "ANULADO", "ANULADA", "VOID", "VOIDED",
                       "OUT_OF_SERVICE", "OUTOFSERVICE", "CLOSED", "CLOSE",
-                      "DELIVERED", "ENTREGADO", "SERVED", "SERVIDO")
+                      "CERRADO", "CERRADA", "DELIVERED", "ENTREGADO",
+                      "ENTREGADA", "SERVED", "SERVIDO", "COMPLETADA",
+                      "COMPLETADO", "COMPLETED", "FINALIZADA", "FINALIZADO")
 
 
 def _nombre_mesa_de(db, orden) -> str:
@@ -1077,15 +1108,23 @@ def _nombre_mesa_de(db, orden) -> str:
 
 def _estado_inicial_orden(db) -> Optional[str]:
     """Estado con el que pos_compat CREA las órdenes (mesa abierta, sin enviar).
-    Esas NO se muestran en cocina: solo las comandas ya enviadas."""
+    Esas NO se muestran en cocina: solo las comandas ya enviadas.
+    FIX E-14t: enums EN FEMENINO/ES (ABIERTA, PENDIENTE...) y FALLBACK al
+    primer valor no-terminal del enum (que es EXACTAMENTE el que _crear_orden
+    usa con _valor_enum(obligatorio=True)). Antes con enums como
+    ('ABIERTA','ENVIADA',...) devolvía None → el re-send de una cuenta
+    entregada saltaba al siguiente valor del enum = PAGADA, y la cuenta
+    desaparecía de la mesa."""
     vals = _valores_enum(db, "orders", "status")
     if not vals:
         return None  # sin enum conocido: no filtramos el inicial
-    for p in ("OPEN", "PENDING", "CREATED", "NUEVO"):
+    for p in ("OPEN", "PENDING", "CREATED", "NUEVO", "ABIERTA", "ABIERTO",
+              "PENDIENTE", "NUEVA"):
         for v in vals:
             if str(v).upper() == p:
                 return v
-    return None
+    no_terminal = [v for v in vals if str(v).upper() not in _TERMINALES]
+    return no_terminal[0] if no_terminal else None
 
 
 def _iso_de(v) -> Optional[str]:
@@ -1323,6 +1362,199 @@ def debug_tablero(db=Depends(_db)):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 6.bis · CUENTA DE MESA EN VIVO (FIX E-14t)
+# ─────────────────────────────────────────────────────────────────────────
+# SÍNTOMA: el ciclo cocina completo ya funciona (enviar → kanban → entregar),
+# pero el panel de la mesa en /pos muestra "Cuenta abierta · Total $0" y
+# NINGÚN producto: la vista de cuenta consulta rutas del backend VIEJO que
+# filtran por estado "abierto" exacto. Al enviar la comanda el pedido pasa a
+# SENT / IN_PREPARATION y para esa vista el pedido "deja de existir"
+# (items [] · total 0). Y lo ENTREGADO directamente desaparecía: el mesero
+# nunca veía qué llevar a la mesa.
+#
+# FIX: pos_compat sirve AHORA la cuenta en TODAS las rutas verosímiles
+# (cuenta / bill, con y sin /pos) y devuelve TODOS los pedidos NO pagados de
+# la mesa — borrador sin enviar, en cocina, preparando, listo y ENTREGADO
+# (¡esos hay que cobrarlos!) — con:
+#   · items[] plano con ALIASES ES/EN (nombre/name, precio/unit_price,
+#     cantidad/quantity, recipeId, itemId...) → el mapper del front lo lee
+#     venga como venga,
+#   · estado_cocina por ítem y por comanda: sin_enviar · en_cocina ·
+#     preparando · listo · entregado,
+#   · pedidos[] (detalle por comanda), orderId principal, subtotal/total
+#     recalculados desde los ítems reales,
+#   · banderas hay_listos / hay_entregados / hay_pendientes / puede_cobrar.
+# SIN AUTH (como todo pos_compat) → se acabó el 401 en la cuenta.
+_SIN_PAGADO = ("PAID", "PAGADO", "PAGADA", "COBRADO", "COBRADA", "CLOSED",
+               "CERRADA", "CERRADO", "FACTURADA", "FACTURADO", "INVOICED")
+_SIN_CANCELADO = ("CANCELLED", "CANCELED", "CANCELADO", "CANCELADA",
+                  "ANULADA", "ANULADO", "VOID", "VOIDED")
+_SIN_PREPARANDO = ("IN_PREPARATION", "PREPARACION", "EN_PREPARACION",
+                   "PREPARANDO", "COOKING", "COCINANDO", "IN_PROGRESS",
+                   "EN_PROCESO", "PROCESSING", "PROGRESS")
+_SIN_LISTO = ("READY", "LISTA", "LISTO", "PREPARADA", "PREPARADO", "DONE",
+              "TERMINADA", "TERMINADO", "FINISHED")
+_SIN_ENTREGADO = ("DELIVERED", "ENTREGADA", "ENTREGADO", "SERVED", "SERVIDO",
+                  "COMPLETADA", "COMPLETED", "FINALIZADA", "FINALIZADO")
+
+
+def _estado_cocina_de(db, status) -> str:
+    """Estado de comanda NORMALIZADO para el front, desde el estado real de
+    orders.status (enum del proyecto, ES o EN). Orden de chequeo importa:
+    terminal → entregado → listo → preparando → inicial(sin enviar) → cocina."""
+    s = str(status or "").strip().upper()
+    if not s:
+        return "sin_enviar"
+    if any(x in s for x in _SIN_PAGADO):
+        return "pagado"
+    if any(x in s for x in _SIN_CANCELADO):
+        return "cancelado"
+    if any(x in s for x in _SIN_ENTREGADO):
+        return "entregado"
+    if any(x in s for x in _SIN_LISTO):
+        return "listo"
+    if any(x in s for x in _SIN_PREPARANDO):
+        return "preparando"
+    inicial = _estado_inicial_orden(db)
+    if inicial and s == str(inicial).upper():
+        return "sin_enviar"
+    return "en_cocina"  # enviado/ENVIADA/SENT/... o estado desconocido en curso
+
+
+def _item_cuenta(it: dict, estado: str, comanda: str) -> dict:
+    """Ítem de la cuenta con ALIASES ES/EN para que el mapper del front
+    (cuentaApi → Cuenta {items:[{id, recipeId, nombre, precio, cantidad}]})
+    encuentre SIEMPRE el campo que busca, venga como venga."""
+    qty = int(it.get("quantity") or 1)
+    precio = float(it.get("unit_price") or 0)
+    nombre = it.get("name") or "Ítem"
+    out = dict(it)
+    out.update({
+        "item_id": it.get("id"),
+        "recipeId": it.get("recipe_id"),
+        "nombre": nombre, "name": nombre,
+        "precio": precio, "price": precio, "unit_price": precio,
+        "cantidad": qty, "quantity": qty, "qty": qty,
+        "line_total": qty * precio, "importe": qty * precio,
+        "estado_cocina": estado, "estadoCocina": estado,
+        "comanda": comanda, "order_number": comanda,
+    })
+    return out
+
+
+def _cuenta_de_mesa(db, table_id: str) -> dict:
+    mesa = _mesa(db, table_id)
+    if not mesa:
+        raise HTTPException(404, f"Mesa {table_id} no encontrada")
+    nombre_mesa = ""
+    for campo in ("name", "nombre", "label", "etiqueta"):
+        v = mesa.get(campo)
+        if v not in (None, ""):
+            nombre_mesa = str(v)
+            break
+    if not nombre_mesa and mesa.get("number") is not None:
+        nombre_mesa = f"Mesa {mesa['number']}"
+
+    # TODAS las órdenes de la mesa; se filtran pagadas/anuladas en Python
+    # con sinónimos (el enum real puede ser PAID o PAGADA o COBRADA...)
+    try:
+        filas = db.execute(text("SELECT * FROM orders WHERE table_id IN (:a,:b) "
+                                "ORDER BY created_at ASC"),
+                           {"a": str(mesa["id"]), "b": _norm_id(mesa["id"])}).mappings().all()
+    except Exception:
+        db.rollback()
+        try:
+            filas = db.execute(text("SELECT * FROM orders WHERE table_id IN (:a,:b)"),
+                               {"a": str(mesa["id"]), "b": _norm_id(mesa["id"])}).mappings().all()
+        except Exception:
+            db.rollback()
+            filas = []
+
+    pedidos, items_flat = [], []
+    subtotal, estados = 0.0, set()
+    for f in filas:
+        try:
+            o = dict(f)
+            st_raw = o.get("status")
+            st = str(st_raw or "").upper()
+            if any(x in st for x in _SIN_PAGADO) or any(x in st for x in _SIN_CANCELADO):
+                continue  # ya cobrada / anulada: no es parte de la cuenta activa
+            try:
+                items = _items_de_orden(db, o.get("id"))
+            except Exception as e:
+                _log("cuenta: items de", o.get("id"), "falló:", e)
+                db.rollback()
+                items = []
+            estado = _estado_cocina_de(db, st_raw)
+            estados.add(estado)
+            code = str(o.get("order_number") or o.get("code") or "")
+            sub_o = sum(int(i.get("quantity") or 1) * float(i.get("unit_price") or 0)
+                        for i in items)
+            subtotal += sub_o
+            for i in items:
+                items_flat.append(_item_cuenta(i, estado, code))
+            pedidos.append({
+                "id": o.get("id"), "order_id": o.get("id"), "orderId": o.get("id"),
+                "order_number": code, "code": code,
+                "status": st_raw, "estado": st_raw, "estado_cocina": estado,
+                "table_id": o.get("table_id"), "mesa_id": o.get("table_id"),
+                "created_at": _iso_de(o.get("created_at") or o.get("updated_at")),
+                "subtotal": sub_o, "total": sub_o,
+                "items": items, "n_items": len(items),
+            })
+        except Exception as e:
+            _log("cuenta: fila de orden saltada:", e)
+            db.rollback()
+            continue
+
+    sesion = _sesion_abierta(db, mesa["id"])
+    ultima = pedidos[-1] if pedidos else None
+    hay_cocina = bool(estados & {"sin_enviar", "en_cocina", "preparando"})
+    return {
+        "version": "E-14t",
+        "mesa_id": mesa["id"], "mesaId": mesa["id"], "table_id": mesa["id"],
+        "mesa_nombre": nombre_mesa, "mesa": nombre_mesa, "table_name": nombre_mesa,
+        "mesa_status": mesa.get("status"),
+        "session_id": (sesion["id"] if sesion and "id" in sesion else None),
+        "estado": "abierta", "status": "OPEN", "estado_cuenta": "abierta",
+        "order_id": (ultima["id"] if ultima else None),
+        "orderId": (ultima["id"] if ultima else None),
+        "order_number": (ultima["order_number"] if ultima else None),
+        "items": items_flat, "lineas": items_flat, "detalle": items_flat,
+        "pedidos": pedidos, "comandas": pedidos,
+        "n_pedidos": len(pedidos), "n_items": len(items_flat),
+        "subtotal": subtotal, "propina": 0.0, "tip": 0.0, "total": subtotal,
+        "total_cents": int(round(subtotal * 100)),
+        "currency": "COP",
+        "hay_listos": "listo" in estados,
+        "hay_entregados": "entregado" in estados,
+        "hay_pendientes": hay_cocina,
+        "puede_cobrar": bool(items_flat) and not hay_cocina,
+    }
+
+
+@router.get("/api/v1/pos/tables/{table_id}/cuenta")
+@router.get("/api/v1/tables/{table_id}/cuenta")
+@router.get("/api/v1/pos/tables/{table_id}/bill")
+@router.get("/api/v1/tables/{table_id}/bill")
+@router.get("/api/v1/pos/cuenta/{table_id}")
+@router.get("/api/v1/cuenta/{table_id}")
+def cuenta_de_mesa(table_id: str, db=Depends(_db)):
+    return _cuenta_de_mesa(db, table_id)
+
+
+@router.get("/api/v1/tables/{table_id}/order")
+def pedido_de_mesa_sin_prefijo(table_id: str, db=Depends(_db)):
+    """Alias sin /pos del pedido abierto: si el front viejo lo consultaba en
+    el router original (con auth y filtro por estado 'abierto'), ahora cae
+    aquí y ve el pedido con sus ítems pase lo que pase en cocina."""
+    orden = _orden_abierta(db, table_id)
+    if not orden:
+        raise HTTPException(404, f"La mesa {table_id} no tiene pedido abierto")
+    return _order_dict(db, orden)
+
+
 # ── FIX E-14q: ENTREGAR ──────────────────────────────────────────────
 # El kanban marcaba la comanda LISTA y ahí quedaba: NO existía la ruta de
 # entrega. "Entregar" fija el estado de entrega del ENUM REAL del proyecto
@@ -1365,3 +1597,5 @@ _log("rutas de comanda registradas bajo /api/v1/pos ✓")
 _log("E-14q: ENTREGAR → POST .../deliver activo · advance/status aceptan body ✓")
 _log("E-14s: send blindado (rescata items del body · re-send NO salta columnas · 422 si va vacía) "
       "· kanban nunca oculta comandas con productos · DEBUG GET /api/v1/pos/debug/tablero ✓")
+_log("E-14t: CUENTA DE MESA EN VIVO → GET /pos/tables/{id}/cuenta (y bill, con/sin /pos) "
+      "· items con estado_cocina · total real · sin auth ✓")

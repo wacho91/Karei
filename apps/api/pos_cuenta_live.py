@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_cuenta_live.py (E-14t2) — CUENTA DE MESA EN VIVO (ADD-ON)
-VERSION: E-14t2-v1 · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14t2"
+Kārei · pos_cuenta_live.py (E-14u) — CUENTA EN VIVO + COBRAR + REPORTES
+VERSION: E-14u · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14u"
+
+NUEVO EN E-14u (lo que pide el dashboard):
+· El POST cobrar AHORA REGISTRA el método de pago (efectivo/tarjeta/nequi)
+  y la propina en una tabla propia karei_payments (se crea sola).
+· GET /api/v1/pos/reportes/pagos → desglose por método de HOY, últimos 7
+  días, mes e histórico + últimos 12 cobros. Sin auth (como todo el add-on).
 ============================================================================
 QUÉ ES
 ------
@@ -132,6 +138,10 @@ _log("E-14t2 activo — DB:", DB_URL)
 
 def _uid() -> str:
     return uuid.uuid4().hex
+
+
+def _now() -> str:
+    return datetime.datetime.utcnow().isoformat(sep=" ", timespec="seconds")
 
 
 def _norm_id(x) -> str:
@@ -533,7 +543,7 @@ def _cuenta_de_mesa(db, table_id: str) -> dict:
     ultima = pedidos[-1] if pedidos else None
     hay_cocina = bool(estados & {"sin_enviar", "en_cocina", "preparando"})
     return {
-        "version": "E-14t2",
+        "version": "E-14u",
         "mesa_id": mesa["id"], "mesaId": mesa["id"], "table_id": mesa["id"],
         "mesa_nombre": nombre_mesa, "mesa": nombre_mesa, "table_name": nombre_mesa,
         "mesa_status": mesa.get("status"),
@@ -568,15 +578,68 @@ def cuenta_de_mesa(table_id: str, db=Depends(_db)):
     return _cuenta_de_mesa(db, table_id)
 
 
-_log("E-14t2: CUENTA DE MESA EN VIVO lista → GET /pos/tables/{id}/cuenta "
-     "(y bill, con/sin /pos) · solo lectura · sin auth ✓")
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # 7. COBRAR CUENTA (E-14t3) — primer ladrillo de FACTURACIÓN
 # ─────────────────────────────────────────────────────────────────────────
-def _now() -> str:
-    return datetime.datetime.utcnow().isoformat(sep=" ", timespec="seconds")
+# POST /pos/tables/{id}/cobrar: marca TODAS las órdenes no pagadas de la
+# mesa con el valor TERMINAL 'pagado' del enum REAL (PAID/PAGADA/COBRADA...),
+# actualiza el total real desde los ítems, cierra la sesión abierta y libera
+# la mesa. Enum-safe (misma técnica E-14i): si el enum no tiene sinónimo de
+# pagado, responde 409 con mensaje claro en vez de envenenar filas.
+# E-14u: el body del cobro puede traer MÉTODO DE PAGO y PROPINA:
+#   {"method": "nequi", "tip": 1600}  ·  {"metodo_pago": "tarjeta", "propina_pct": 10}
+# Aliases aceptados (ES/EN): method/payment_method/metodo/medio/metodo_pago/
+# medio_pago/tipo_pago/forma_pago · tip/propina/valor_propina (MONTO) o
+# tip_pct/propina_pct (PORCENTAJE del subtotal).
+_MAPA_METODO = {
+    "efectivo": "efectivo", "cash": "efectivo",
+    "tarjeta": "tarjeta", "card": "tarjeta", "credit_card": "tarjeta",
+    "debit_card": "tarjeta", "credito": "tarjeta", "debito": "tarjeta",
+    "transferencia": "tarjeta", "transfer": "tarjeta", "pse": "tarjeta",
+    "bancolombia": "tarjeta", "bancolombia_qr": "tarjeta",
+    "nequi": "nequi", "daviplata": "nequi",
+}
+_ETIQUETA_METODO = {"efectivo": "Efectivo", "tarjeta": "Tarjeta · Transferencia",
+                    "nequi": "Nequi"}
+
+
+def _normalizar_metodo(v) -> str:
+    """'TARJETA' / 'Card' / 'transferencia' → 'tarjeta'; desconocido queda
+    limpio en minúsculas (aparece como su propio método en el reporte)."""
+    s = re.sub(r"[^a-z0-9_]+", "_", str(v or "").strip().lower())
+    return _MAPA_METODO.get(s, s or "sin_dato")
+
+
+def _metodo_de_payload(payload) -> str:
+    if not isinstance(payload, dict):
+        return "efectivo"  # el panel del POS trae Efectivo por defecto
+    for a in ("method", "payment_method", "metodo", "medio", "metodo_pago",
+              "medio_pago", "tipo_pago", "tipo", "forma_pago"):
+        v = payload.get(a)
+        if v not in (None, ""):
+            return _normalizar_metodo(v)
+    return "efectivo"
+
+
+def _tip_de_payload(payload, subtotal: float) -> float:
+    """Propina como MONTO (tip/propina) o PORCENTAJE (tip_pct/propina_pct)."""
+    if not isinstance(payload, dict):
+        return 0.0
+    for a in ("tip", "propina", "valor_propina", "tip_amount"):
+        v = payload.get(a)
+        if v not in (None, ""):
+            try:
+                return max(0.0, float(v))
+            except (TypeError, ValueError):
+                pass
+    for a in ("tip_pct", "propina_pct", "porcentaje_propina", "tip_percent"):
+        v = payload.get(a)
+        if v not in (None, ""):
+            try:
+                return max(0.0, round(subtotal * (float(v) / 100.0), 2))
+            except (TypeError, ValueError):
+                pass
+    return 0.0
 
 
 def _valor_pagado(db) -> Optional[str]:
@@ -595,9 +658,10 @@ def _valor_pagado(db) -> Optional[str]:
 @router.post("/api/v1/tables/{table_id}/cobrar")
 @router.post("/api/v1/pos/tables/{table_id}/pay")
 @router.post("/api/v1/tables/{table_id}/pay")
-def cobrar_cuenta(table_id: str, db=Depends(_db)):
-    # Cuerpo opcional (metodo de pago / propina): se ignora por ahora —
-    # la factura completa llega en la fase Facturación.
+def cobrar_cuenta(table_id: str, payload: Optional[dict] = None, db=Depends(_db)):
+    # E-14u: el body opcional trae método de pago y propina. Sin body →
+    # efectivo · propina 0 (mismo comportamiento de siempre).
+    metodo = _metodo_de_payload(payload)
     mesa = _mesa(db, table_id)
     if not mesa:
         raise HTTPException(404, f"Mesa {table_id} no encontrada")
@@ -619,7 +683,7 @@ def cobrar_cuenta(table_id: str, db=Depends(_db)):
                  "(PAID/PAGADA/COBRADA/...). Mándame la lista de estados del enum.")
     ahora = _now()
     cols_o = _columnas(db, "orders")
-    n, total = 0, 0.0
+    n, total, cobradas_ids = 0, 0.0, []
     for f in filas:
         try:
             o = dict(f)
@@ -645,6 +709,7 @@ def cobrar_cuenta(table_id: str, db=Depends(_db)):
             db.execute(text(f"UPDATE orders SET {sets} WHERE id = :i"),
                        {**datos, "i": o["id"]})
             n += 1
+            cobradas_ids.append(str(o.get("id")))
         except Exception as e:
             db.rollback()
             _log("cobrar: orden saltada:", e)
@@ -654,6 +719,19 @@ def cobrar_cuenta(table_id: str, db=Depends(_db)):
         raise HTTPException(422, "No hay pedidos abiertos para cobrar en esta mesa")
     db.commit()
     _log("cobrar:", n, "orden(es) →", pagado, "· total", total, "· mesa", mesa["id"])
+
+    # E-14u: propina (monto o %) + REGISTRO DEL PAGO → reportes del dashboard
+    propina = _tip_de_payload(payload, total)
+    total_final = round(total + propina, 2)
+    nombre_mesa = ""
+    for campo in ("name", "nombre", "label", "etiqueta"):
+        if mesa.get(campo) not in (None, ""):
+            nombre_mesa = str(mesa.get(campo))
+            break
+    if not nombre_mesa and mesa.get("number") is not None:
+        nombre_mesa = f"Mesa {mesa['number']}"
+    mesa["_nombre"] = nombre_mesa
+    pago_id = _registrar_pago(total, propina, metodo, mesa, cobradas_ids)
 
     # Cerrar sesión abierta (transacción INDEPENDIENTE: si falla, no toca el cobro)
     try:
@@ -704,9 +782,183 @@ def cobrar_cuenta(table_id: str, db=Depends(_db)):
     except Exception as e:
         _log("cobrar: mesa sin liberar (no crítico):", e)
 
-    return {"version": "E-14t2", "ok": True, "cobradas": n, "total": total,
-            "mesa_id": mesa["id"], "currency": "COP"}
+    return {"version": "E-14u", "ok": True, "cobradas": n,
+            "subtotal": total, "propina": propina, "total": total_final,
+            "metodo": metodo,
+            "metodo_etiqueta": _ETIQUETA_METODO.get(metodo, metodo.replace("_", " ").capitalize()),
+            "pago_id": pago_id, "mesa_id": mesa["id"], "currency": "COP"}
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 8. PAGOS (E-14u) — cada cobro queda REGISTRADO en karei_payments
+# ─────────────────────────────────────────────────────────────────────────
+# Tabla PROPIA del add-on (no toca tus modelos ni tus migraciones). Aquí
+# vive la fuente de verdad de "quién pagó con qué y cuánto" para el
+# dashboard. Si algo falla aquí, el COBRO ya está hecho: solo se avisa en
+# el log — nunca se rompe el cobro por el reporte.
+_TABLA_PAGOS = "karei_payments"
+_PAGOS_LISTA = {"hecho": False}
+
+
+def _asegurar_tabla_pagos() -> bool:
+    if _PAGOS_LISTA["hecho"]:
+        return True
+    try:
+        with _engine.begin() as cx:
+            cx.execute(text(
+                f"CREATE TABLE IF NOT EXISTS {_TABLA_PAGOS} ("
+                "id VARCHAR(32) PRIMARY KEY, created_at DATETIME, paid_at DATETIME, "
+                "table_id VARCHAR(32), table_name VARCHAR(80), method VARCHAR(30), "
+                "subtotal FLOAT, tip FLOAT, total FLOAT, n_orders INTEGER, "
+                "order_ids TEXT, currency VARCHAR(8))"))
+        _PAGOS_LISTA["hecho"] = True
+        _log("tabla de pagos lista:", _TABLA_PAGOS)
+        return True
+    except Exception as e:
+        _log("no pude crear", _TABLA_PAGOS, "(no crítico):", e)
+        return False
+
+
+def _registrar_pago(subtotal: float, propina: float, metodo: str,
+                    mesa: dict, ordenes: list) -> Optional[str]:
+    """Guarda el pago del cobro (hora LOCAL del servidor, para que 'hoy'
+    del reporte cuadre con tu reloj). Devuelve el id del pago o None."""
+    if not _asegurar_tabla_pagos():
+        return None
+    pid = _uid()
+    ahora_local = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+    try:
+        with _engine.begin() as cx:
+            cx.execute(text(
+                f"INSERT INTO {_TABLA_PAGOS} (id, created_at, paid_at, table_id, "
+                "table_name, method, subtotal, tip, total, n_orders, order_ids, "
+                "currency) VALUES (:i,:c,:p,:t,:tn,:m,:s,:ti,:to,:n,:oi,'COP')"),
+                {"i": pid, "c": ahora_local, "p": ahora_local,
+                 "t": str(mesa.get("id") or ""), "tn": str(mesa.get("_nombre") or ""),
+                 "m": metodo, "s": round(float(subtotal or 0), 2),
+                 "ti": round(float(propina or 0), 2),
+                 "to": round(float(subtotal or 0) + float(propina or 0), 2),
+                 "n": len(ordenes or []), "oi": (",".join(ordenes or []))[:500]})
+        _log("pago registrado:", metodo, round(float(subtotal or 0) + float(propina or 0), 2),
+             "· mesa", mesa.get("id"))
+        return pid
+    except Exception as e:
+        _log("pago SIN registrar (no crítico):", e)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 9. REPORTES DE PAGOS POR MÉTODO (E-14u) — lo que pide el dashboard
+# ─────────────────────────────────────────────────────────────────────────
+# GET /api/v1/pos/reportes/pagos (+ 4 variantes) →
+#   resumen.{hoy,semana,mes,historico}.{efectivo,tarjeta,nequi,otros,total,n_pagos}
+#   por_metodo[{metodo,etiqueta,hoy,semana,mes,historico,cobros_hoy,cobros}]
+#   ultimos[≤12]  ·  sin auth (como todo el add-on). Los 3 canónicos SIEMPRE
+#   aparecen, aunque vayan en 0, para que el dashboard los pinte fijo.
+def _leer_pagos() -> list:
+    if not _asegurar_tabla_pagos():
+        return []
+    try:
+        with _engine.connect() as cx:
+            # rowid DESC desempata pagos del MISMO segundo (último insertado
+            # primero) → "últimos cobros" siempre en orden real.
+            filas = cx.execute(text(
+                f"SELECT * FROM {_TABLA_PAGOS} ORDER BY paid_at DESC, rowid DESC"
+            )).mappings().all()
+            return [dict(f) for f in filas]
+    except Exception as e:
+        _log("reporte: no pude leer pagos:", e)
+        return []
+
+
+def _fecha_de(p: dict) -> Optional[datetime.datetime]:
+    for c in ("paid_at", "created_at"):
+        v = p.get(c)
+        if not v:
+            continue
+        try:
+            return datetime.datetime.fromisoformat(str(v).replace("T", " "))
+        except Exception:
+            continue
+    return None
+
+
+def _en_ventana(f, desde) -> bool:
+    if f is None:
+        return False
+    return desde is None or f >= desde
+
+
+@router.get("/api/v1/pos/reportes/pagos")
+@router.get("/api/v1/pos/reportes/pagos/resumen")
+@router.get("/api/v1/pos/pagos")
+@router.get("/api/v1/pos/pagos/reporte")
+@router.get("/api/v1/pos/payments/summary")
+@router.get("/api/v1/reportes/pagos")
+def reporte_pagos():
+    pagos = _leer_pagos()
+    ahora = datetime.datetime.now()
+    d0 = datetime.datetime(ahora.year, ahora.month, ahora.day)
+    ventanas = {"hoy": d0, "semana": d0 - datetime.timedelta(days=6),
+                "mes": d0 - datetime.timedelta(days=29), "historico": None}
+    canon = ("efectivo", "tarjeta", "nequi")
+
+    def suma(sel: list) -> float:
+        return round(sum(float(p.get("total") or 0) for p in sel), 2)
+
+    resumen = {}
+    for nombre, desde in ventanas.items():
+        sel = [p for p in pagos if _en_ventana(_fecha_de(p), desde)]
+        cubo = {"total": suma(sel), "n_pagos": len(sel)}
+        for m in canon:
+            cubo[m] = round(sum(float(p.get("total") or 0) for p in sel
+                                if str(p.get("method") or "") == m), 2)
+        cubo["otros"] = round(sum(float(p.get("total") or 0) for p in sel
+                                  if str(p.get("method") or "") not in canon), 2)
+        resumen[nombre] = cubo
+
+    vistos = list(canon) + sorted({str(p.get("method")) for p in pagos
+                                   if str(p.get("method") or "") not in canon})
+    por_metodo = []
+    for m in vistos:
+        sel = [p for p in pagos if str(p.get("method") or "") == m]
+        fila = {"metodo": m,
+                "etiqueta": _ETIQUETA_METODO.get(m, m.replace("_", " ").capitalize())}
+        for nombre, desde in ventanas.items():
+            fila[nombre] = suma([p for p in sel if _en_ventana(_fecha_de(p), desde)])
+        fila["cobros_hoy"] = len([p for p in sel
+                                  if _en_ventana(_fecha_de(p), ventanas["hoy"])])
+        fila["cobros"] = len(sel)
+        por_metodo.append(fila)
+
+    ultimos = []
+    for p in pagos[:12]:
+        f = _fecha_de(p)
+        met = str(p.get("method") or "sin_dato")
+        ultimos.append({
+            "id": p.get("id"), "metodo": met,
+            "metodo_etiqueta": _ETIQUETA_METODO.get(met, met.replace("_", " ").capitalize()),
+            "subtotal": float(p.get("subtotal") or 0),
+            "propina": float(p.get("tip") or 0),
+            "total": float(p.get("total") or 0),
+            "mesa_id": p.get("table_id"), "mesa": p.get("table_name"),
+            "paid_at": _iso_de(p.get("paid_at") or p.get("created_at")),
+            "hora": (f.strftime("%H:%M") if f else None),
+            "fecha": (f.strftime("%Y-%m-%d") if f else None),
+        })
+
+    return {"version": "E-14u",
+            "generado_en": ahora.isoformat(sep=" ", timespec="seconds"),
+            "resumen": resumen, "por_metodo": por_metodo,
+            "metodos": [m["metodo"] for m in por_metodo],
+            "total_hoy": resumen["hoy"]["total"],
+            "n_pagos_hoy": resumen["hoy"]["n_pagos"],
+            "ultimos": ultimos, "currency": "COP"}
+
+
+_log("E-14t2: CUENTA DE MESA EN VIVO lista → GET /pos/tables/{id}/cuenta "
+     "(y bill, con/sin /pos) · solo lectura · sin auth ✓")
 _log("E-14t2+E-14t3: COBRAR CUENTA listo → POST /pos/tables/{id}/cobrar "
      "(y pay, con/sin /pos) · marca PAGADA + cierra sesión + libera mesa ✓")
+_log("E-14u: COBRAR registra método+propina en karei_payments · REPORTES → "
+     "GET /pos/reportes/pagos (efectivo/tarjeta/nequi · hoy/semana/mes) ✓")
