@@ -19,6 +19,30 @@ function RutaProtegida({ roles }: { roles: Rol[] }) {
   return <Outlet />;
 }
 
+/** Fix visual del tema oscuro: Chrome y Safari pintan las cajas autocompletadas
+ *  (correo/contraseña guardados) de blanco/celeste por encima del diseño.
+ *  Este CSS global les gana y las devuelve al tema Kārei en TODO el app,
+ *  incluido el login. No toca lógica ni cambia nada más del diseño. */
+function FixAutocompletado() {
+  return (
+    <style>{`
+      input:-webkit-autofill,
+      input:-webkit-autofill:hover,
+      input:-webkit-autofill:focus,
+      input:-webkit-autofill:active,
+      input:autofill,
+      input:autofill:hover,
+      input:autofill:focus,
+      input:autofill:active {
+        -webkit-text-fill-color: #f1f5f9 !important;
+        caret-color: #f1f5f9 !important;
+        -webkit-box-shadow: 0 0 0 1000px #1e293b inset !important;
+        transition: background-color 9999s ease-in-out 0s;
+      }
+    `}</style>
+  );
+}
+
 /** La raíz "/" no está guardada: solo decide a dónde ir cada rol (evita bucles). */
 function Inicio() {
   const token = useAuthStore((s) => s.token);
@@ -29,7 +53,9 @@ function Inicio() {
 
 export function App() {
   return (
-    <Routes>
+    <>
+      <FixAutocompletado />
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
 
       {/* Layout único; dentro, cada rama con su candado de rol */}
@@ -56,6 +82,7 @@ export function App() {
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }
