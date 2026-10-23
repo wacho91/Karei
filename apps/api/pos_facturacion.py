@@ -1,11 +1,11 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14v) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+Kārei · pos_facturacion.py (E-14w) — FACTURACIÓN: TIRILLA + CAJA + CUADRE
 ═════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
 Add-on INDEPENDIENTE (misma filosofía de pos_cuenta_live: no toca tus
-modelos, tus routers ni tu pos_compat.py). Agrega 4 piezas:
+modelos, tus routers ni tu pos_compat.py). Agrega 5 piezas:
 
   1. CONFIG DEL RESTAURANTE  → tabla karei_config (clave/valor) que SE CREA
      SOLA con datos ficticios estándar colombianos. Los editas desde la
@@ -20,6 +20,13 @@ modelos, tus routers ni tu pos_compat.py). Agrega 4 piezas:
      con valor unitario y total, subtotal, IVA (discriminado), propina
      voluntaria, forma de pago (contado), medio de pago (efectivo/nequi/
      tarjeta), "consumidor final", nombre del software.
+  5. CUADRE DEL DÍA IMPRIMIBLE → GET /pos/facturacion/cuadre — el Informe
+     Z listo para imprimir y firmar: LO QUE SE VENDIÓ (plato a plato con
+     cantidades), el TOTAL de la venta con base e IVA discriminados, y el
+     RECAUDO por método de pago (cuánto quedó en efectivo en caja, cuánto
+     entró por Nequi y cuánto por tarjeta — las "consignaciones" del día),
+     con las propinas aparte. Lo imprime el botón "🖨️ Cuadre del día" de
+     la página Ventas (componente CuadreDia.tsx).
 
 CONSECUTIVO DE TIRILLA
 ----------------------
@@ -136,7 +143,7 @@ def _fecha_de(p: dict) -> Optional[datetime.datetime]:
     return None
 
 
-_log("E-14v activo — DB:", DB_URL)
+_log("E-14w activo — DB:", DB_URL)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -369,7 +376,7 @@ def _items_de_ordenes(db, order_ids: list) -> list:
 @router.get("/api/v1/pos/facturacion/config")
 @router.get("/api/v1/pos/config/restaurante")
 def ver_config():
-    return {"version": "E-14v", "config": _config_dict()}
+    return {"version": "E-14w", "config": _config_dict()}
 
 
 @router.put("/api/v1/pos/facturacion/config")
@@ -395,7 +402,7 @@ def guardar_config(payload: Optional[dict] = None):
         except Exception as e:
             _log("config: clave sin guardar", clave, ":", e)
     _log("config actualizada:", guardados)
-    return {"version": "E-14v", "ok": True, "guardados": guardados,
+    return {"version": "E-14w", "ok": True, "guardados": guardados,
             "config": _config_dict()}
 
 
@@ -413,7 +420,7 @@ def historial_pagos(dias: int = 7, metodo: Optional[str] = None,
             pagos = [dict(f) for f in filas]
     except Exception as e:
         _log("historial: no pude leer pagos:", e)
-        return {"version": "E-14v", "pagos": [], "n": 0, "total": 0,
+        return {"version": "E-14w", "pagos": [], "n": 0, "total": 0,
                 "currency": "COP"}
     desde = None
     if dias and int(dias) > 0:
@@ -429,7 +436,7 @@ def historial_pagos(dias: int = 7, metodo: Optional[str] = None,
     off = max(0, int(offset or 0))
     total_all = round(sum(float(p.get("total") or 0) for p in pagos), 2)
     pagina = pagos[off:off + limit]
-    return {"version": "E-14v", "n": len(pagos), "total": total_all,
+    return {"version": "E-14w", "n": len(pagos), "total": total_all,
             "currency": "COP",
             "pagos": [{
                 "id": p.get("id"),
@@ -494,7 +501,7 @@ def cierre_de_caja(fecha: Optional[str] = None):
                if p.get("ticket_no") is not None]
     horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
     cfg = _config_dict()
-    return {"version": "E-14v", "tipo": "CIERRE DE CAJA (Informe Z)",
+    return {"version": "E-14w", "tipo": "CIERRE DE CAJA (Informe Z)",
             "fecha": f.strftime("%Y-%m-%d"),
             "generado_en": _now(),
             "n_pagos": len(del_dia),
@@ -573,7 +580,7 @@ def factura_por_pago(pago_id: str, db=Depends(_db)):
         base, iva, total = subtotal, 0.0, round(subtotal + propina, 2)
 
     fp = _fecha_de(pago)
-    return {"version": "E-14v", "currency": "COP",
+    return {"version": "E-14w", "currency": "COP",
             "config": cfg,
             "pago": {"id": pago.get("id"),
                      "tirilla_no": _tirilla_no(pago.get("ticket_no")),
@@ -587,3 +594,122 @@ def factura_por_pago(pago_id: str, db=Depends(_db)):
                         "propina": propina, "total": total,
                         "leyenda_iva": ("IVA incluido en los precios"
                                         if incluido else "IVA por agregar")}}
+
+
+# 5.e CUADRE DEL DÍA — el Informe Z imprimible: qué se vendió + recaudo
+# Lo imprime el botón "🖨️ Cuadre del día" de la página Ventas (CuadreDia.tsx)
+@router.get("/api/v1/pos/facturacion/cuadre")
+@router.get("/api/v1/pos/facturacion/cuadre-del-dia")
+def cuadre_del_dia(fecha: Optional[str] = None, db=Depends(_db)):
+    f = None
+    if fecha:
+        try:
+            f = datetime.datetime.strptime(fecha, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(422, "fecha debe ser YYYY-MM-DD")
+    if f is None:
+        ahora = datetime.datetime.now()
+        f = datetime.datetime(ahora.year, ahora.month, ahora.day)
+    d1 = f + datetime.timedelta(days=1)
+
+    pagos = []
+    try:
+        with _engine.connect() as cx:
+            filas = cx.execute(text(
+                f"SELECT * FROM {_TABLA_PAGOS} "
+                "ORDER BY COALESCE(paid_at, created_at), rowid")).mappings().all()
+            pagos = [dict(x) for x in filas]
+    except Exception as e:
+        _log("cuadre: no pude leer pagos:", e)
+    del_dia = []
+    for p in pagos:
+        fp = _fecha_de(p)
+        if fp is not None and f <= fp < d1:
+            del_dia.append(p)
+
+    # ── LO QUE SE VENDIÓ: agrego los items de las órdenes de cada cobro ──
+    prod: dict = {}
+    for p in del_dia:
+        ids = [x for x in str(p.get("order_ids") or "").split(",") if x.strip()]
+        items = _items_de_ordenes(db, ids)
+        if not items:
+            # sin items legibles → una línea "Consumo en mesa" con el subtotal
+            st = float(p.get("subtotal") or 0)
+            if st <= 0:
+                continue
+            d0 = prod.get("Consumo en mesa") or {
+                "nombre": "Consumo en mesa", "cantidad": 0, "total": 0.0}
+            d0["cantidad"] += 1
+            d0["total"] += st
+            prod["Consumo en mesa"] = d0
+            continue
+        for it in items:
+            clave = str(it.get("nombre") or "Producto")
+            d0 = prod.get(clave) or {"nombre": clave, "cantidad": 0, "total": 0.0}
+            d0["cantidad"] += int(it.get("cantidad") or 1)
+            d0["total"] += float(it.get("total") or 0)
+            prod[clave] = d0
+    por_producto = sorted(
+        [{"nombre": v["nombre"], "cantidad": v["cantidad"],
+          "total": round(v["total"], 2)} for v in prod.values()],
+        key=lambda x: -x["total"])
+
+    # ── RECAUDO por método (los 3 canónicos SIEMPRE presentes + otros) ──
+    canon = ("efectivo", "tarjeta", "nequi")
+    por_metodo = []
+    for m in canon:
+        sel = [p for p in del_dia if str(p.get("method") or "") == m]
+        por_metodo.append({
+            "metodo": m, "n": len(sel),
+            "subtotal": round(sum(float(p.get("subtotal") or 0) for p in sel), 2),
+            "propina": round(sum(float(p.get("tip") or 0) for p in sel), 2),
+            "total": round(sum(float(p.get("total") or 0) for p in sel), 2)})
+    otros = [p for p in del_dia if str(p.get("method") or "") not in canon]
+    if otros:
+        por_metodo.append({
+            "metodo": "otros", "n": len(otros),
+            "subtotal": round(sum(float(p.get("subtotal") or 0) for p in otros), 2),
+            "propina": round(sum(float(p.get("tip") or 0) for p in otros), 2),
+            "total": round(sum(float(p.get("total") or 0) for p in otros), 2)})
+
+    # ── TOTALES del día + IVA discriminado (misma matemática de la tirilla) ──
+    cfg = _config_dict()
+    try:
+        pct = float(cfg.get("iva_pct") or 0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    incluido = str(cfg.get("iva_incluido") or "si").strip().lower() in (
+        "si", "sí", "true", "1", "yes")
+    venta = round(sum(float(p.get("subtotal") or 0) for p in del_dia), 2)
+    propinas = round(sum(float(p.get("tip") or 0) for p in del_dia), 2)
+    if pct > 0 and incluido:
+        base = round(venta / (1 + pct / 100.0), 2)
+        iva = round(venta - base, 2)
+    elif pct > 0:
+        base = venta
+        iva = round(venta * pct / 100.0, 2)
+    else:
+        base, iva = venta, 0.0
+
+    tickets = [int(p.get("ticket_no")) for p in del_dia
+               if p.get("ticket_no") is not None]
+    horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
+    return {"version": "E-14w", "tipo": "CUADRE DEL DÍA (Informe Z)",
+            "fecha": f.strftime("%Y-%m-%d"),
+            "generado_en": _now(),
+            "currency": "COP",
+            "config": cfg,
+            "resumen": {"n_pagos": len(del_dia),
+                        "venta_total": venta,
+                        "propinas": propinas,
+                        "gran_total": round(venta + propinas, 2),
+                        "base": base, "iva": iva,
+                        "iva_pct": pct, "iva_incluido": incluido,
+                        "leyenda_iva": ("IVA incluido en los precios"
+                                        if incluido else "IVA por agregar")},
+            "por_producto": por_producto,
+            "por_metodo": por_metodo,
+            "primer_pago": (horas[0].strftime("%H:%M") if horas else None),
+            "ultimo_pago": (horas[-1].strftime("%H:%M") if horas else None),
+            "tickets": {"desde": _tirilla_no(min(tickets)) if tickets else None,
+                        "hasta": _tirilla_no(max(tickets)) if tickets else None}}
