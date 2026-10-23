@@ -6,6 +6,7 @@ import ProductsPage from './pages/ProductsPage';
 import TablesPage from './pages/TablesPage';
 import RecetasPage from './pages/RecetasPage';
 import CocinaPage from './pages/CocinaPage';
+import VentasPage from './pages/VentasPage';
 import { useAuthStore, type Rol } from './store/authStore';
 
 /** Exige sesión + uno de los roles (ADMIN pasa siempre, igual que el backend). */
@@ -38,6 +39,7 @@ export function App() {
         {/* Solo ADMIN */}
         <Route element={<RutaProtegida roles={['ADMIN']} />}>
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="ventas" element={<VentasPage />} />
           <Route path="recetas" element={<RecetasPage />} />
         </Route>
 

@@ -14,6 +14,10 @@ const NAV: ItemNav[] = [
     d: 'M3 13h7V3H3v10Zm11 8h7V11h-7v10ZM3 21h7v-6H3v6Zm11-18v6h7V3h-7Z',
   },
   {
+    to: '/ventas', etiqueta: 'Ventas', roles: ['ADMIN'],
+    d: 'M18 17H6v-2h12v2Zm0-4H6v-2h12v2Zm0-4H6V7h12v2ZM3 22l1.5-1.5L6 22l1.5-1.5L9 22l1.5-1.5L12 22l1.5-1.5L15 22l1.5-1.5L18 22l1.5-1.5L21 22V2l-1.5 1.5L18 2l-1.5 1.5L15 2l-1.5 1.5L12 2l-1.5 1.5L9 2 7.5 3.5 6 2 4.5 3.5 3 2v20Z',
+  },
+  {
     to: '/pos', etiqueta: 'Mesas', roles: ['WAITER'],
     d: 'M3 3h8v8H3V3Zm10 0h8v8h-8V3ZM3 13h8v8H3v-8Zm10 0h8v8h-8v-8Z',
   },
