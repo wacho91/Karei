@@ -1,25 +1,33 @@
-// Kārei · Tirilla.tsx (E-14v) — FACTURA / TIRILLA DE PAGO 80mm
+// Kārei · Tirilla.tsx v2 (E-14z) — FACTURA DE VENTA / TIRILLA DE PAGO 80mm
 // ----------------------------------------------------------------------------
 // QUÉ RESUELVE: al confirmar un cobro (o desde la página Ventas) se muestra
-// la TIRILLA estilo impresora térmica con todo lo que exige el art. 617 ET
-// + Res. 42/2020 en lo aplicable sin resolución DIAN real:
-//   razón social + NIT · consecutivo (POS1-000001) · fecha/hora · items con
-//   valor unitario y total · base, IVA discriminado (configurable) · propina
-//   voluntaria (Ley 1275 de 2009) · forma de pago (contado) · medio de pago
-//   · "consumidor final" · nombre del software.
+// el comprobante estilo impresora térmica. Con la versión v2, cuando el
+// restaurante tiene resolución DIAN configurada (⚙ Datos del restaurante),
+// la tirilla asciende a FACTURA DE VENTA:
+//   · título "FACTURA DE VENTA" + resolución (número, fecha, prefijo, rango)
+//   · CUFE de 96 caracteres hex (SHA-384 real vía Web Crypto, determinista:
+//     reimprimir la misma factura da el mismo CUFE)
+//   · CÓDIGO QR de verificación estilo DIAN (catálogo VPFE) — encoder QR
+//     propio sin dependencias (QrCodigo.tsx, probado con decodificador real)
+//   · pie con el software proveedor y su NIT (proveedor tecnológico)
+// Sin resolución configurada sigue imprimiendo el COMPROBANTE DE PAGO de
+// siempre (art. 617 ET): razón social + NIT · consecutivo · fecha/hora ·
+// items con valor unitario · base e IVA discriminado · propina voluntaria
+// (Ley 1275 de 2009) · forma y medio de pago · consumidor final.
 //
 // DOS MODOS:
 //   <Tirilla pagoId={id} onCerrar={fn} />      → descarga la factura del
 //                                                add-on y la muestra.
 //   <Tirilla factura={data} onCerrar={fn} />   → ya tienes los datos.
 //
-// IMPRIMIR: botón 🖨️ → window.print() con CSS de impresión que OCULTA toda
-// la app y solo deja visible la tirilla a 80mm. Funciona en cualquier
-// impresora térmica instalada en el sistema (58/80mm) o PDF.
+// IMPRIMIR: botón → window.print() con CSS que OCULTA toda la app y deja
+// solo la tirilla a 74mm. Sirve para térmica 58/80mm o guardar como PDF.
 //
-// SIN dependencias nuevas (react-query + ../lib/api).
+// SIN dependencias nuevas (react-query + ../lib/api + QrCodigo propio).
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import * as apiModule from '@/lib/api';
+import * as apiModule from '../../lib/api';
+import QrCodigo from './QrCodigo';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -33,6 +41,33 @@ const fechaBonita = (iso: any): string => {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/);
   if (!m) return s;
   return `${m[3]}/${m[2]}/${m[1]} ${m[4]}`;
+};
+
+/** '2026-10-23T14:32:05' → '2026-10-23' (para el CUFE) */
+const fechaSolo = (iso: any): string => String(iso ?? '').slice(0, 10);
+
+/** '2026-10-23 14:32' → '14:32:00' · 'T14:32:05' → '14:32:05' (para el CUFE) */
+const horaSolo = (iso: any): string => {
+  const m = String(iso ?? '').match(/[T ](\d{2}:\d{2}(?::\d{2})?)/);
+  const hhmm = m ? m[1] : '00:00';
+  return hhmm.length === 5 ? `${hhmm}:00` : hhmm;
+};
+
+/** Respaldo si no hay Web Crypto: 96 hex deterministas a partir del texto. */
+const pseudo96 = (s: string): string => {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    a = ((a ^ s.charCodeAt(i)) * 0x01000193) >>> 0;
+    b = ((b + s.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
+  }
+  let out = '';
+  for (let i = 0; i < 24; i++) {
+    a = (a * 1664525 + 1013904223) >>> 0;
+    b = (b * 22695477 + 1) >>> 0;
+    out += ((a >>> 7) ^ (b >>> 9)).toString(16).padStart(8, '0').slice(0, 4);
+  }
+  return out.slice(0, 96).padEnd(96, '0');
 };
 
 const ETIQUETA_METODO: Record<string, string> = {
@@ -60,8 +95,65 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
     refetchOnWindowFocus: false,
   });
 
+  // Respaldo de configuración: si la factura no trae los datos del
+  // restaurante, los pedimos nosotros (misma clave de caché que VentasPage).
+  const qConfig = useQuery({
+    queryKey: ['karei-config-fac'],
+    queryFn: async () => {
+      const r: any = await api.get('/pos/facturacion/config');
+      return r?.data ?? r;
+    },
+    enabled: abierto && pagoId != null,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+
   const data: any = factura ?? consulta?.data ?? null;
   const cerrarTirilla = () => { (onCerrar ?? cerrar)?.(); };
+
+  // ── CUFE: SHA-384 determinista sobre los campos clave del cobro ────────
+  const cfg: any = data?.config ?? qConfig?.data?.config ?? {};
+  const pago: any = data?.pago ?? {};
+  const tot: any = data?.totales ?? {};
+  const esFactura = Boolean(cfg?.resolucion_numero);
+
+  const baseCufe = esFactura
+    ? [
+      `NumFac:${String(pago?.tirilla_no ?? 'S/N')}`,
+      `NitFac:${String(cfg?.nit ?? '')}`,
+      `FecFac:${fechaSolo(pago?.fecha)}`,
+      `HorFac:${horaSolo(pago?.fecha)}`,
+      `ValFac:${Number(tot?.subtotal ?? 0).toFixed(2)}`,
+      `ValIva:${Number(tot?.iva ?? 0).toFixed(2)}`,
+      'ValOtroIm:0.00',
+      `ValTotal:${Number(tot?.total ?? 0).toFixed(2)}`,
+      `NitOfeProv:${String(cfg?.software_nit ?? '')}`,
+      'TipoAmbiente:1',
+    ].join(';')
+    : '';
+
+  const [cufe, setCufe] = useState<string>('');
+  useEffect(() => {
+    let vivo = true;
+    if (!baseCufe) { setCufe(''); return; }
+    (async () => {
+      try {
+        const buf = await crypto.subtle.digest(
+          'SHA-384',
+          new TextEncoder().encode(baseCufe),
+        );
+        const hex = Array.from(new Uint8Array(buf))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+        if (vivo) setCufe(hex);
+      } catch {
+        // contexto sin Web Crypto (raro) → CUFE determinista de respaldo
+        if (vivo) setCufe(pseudo96(baseCufe));
+      }
+    })();
+    return () => { vivo = false; };
+  }, [baseCufe]);
 
   // ── CSS de impresión: SOLO la tirilla sale en el papel ──
   const cssImpresion = `
@@ -84,10 +176,10 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
         <style>{cssImpresion}</style>
         <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-5 text-center">
           {consulta?.isLoading ? (
-            <p className="text-sm text-slate-300">Generando tirilla… 🧾</p>
+            <p className="text-sm text-slate-300">Generando comprobante… 🧾</p>
           ) : (
             <>
-              <p className="text-sm text-rose-300">No pude generar la tirilla.</p>
+              <p className="text-sm text-rose-300">No pude generar el comprobante.</p>
               <p className="mt-1 text-xs text-slate-500">
                 Revisa que el backend tenga pos_facturacion.py (E-14v) y reinicia uvicorn.
               </p>
@@ -105,11 +197,13 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
     );
   }
 
-  const cfg: any = data?.config ?? {};
-  const pago: any = data?.pago ?? {};
   const items: any[] = Array.isArray(data?.items) ? data.items : [];
-  const tot: any = data?.totales ?? {};
   const metodoEtiqueta = ETIQUETA_METODO[String(pago?.metodo ?? '')] ?? String(pago?.metodo ?? '—');
+
+  // URL de verificación dentro del QR (formato catálogo VPFE de la DIAN)
+  const urlQr = cufe
+    ? `https://catalogo-vpfe.dian.gov.co/UserShowDocumentToPublic/${cufe}`
+    : '';
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 ${className}`}>
@@ -125,13 +219,18 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
 
         <p className="my-2 text-center">{'='.repeat(36)}</p>
 
-        {/* ── TÍTULO + resolución DIAN (aparece si está configurada) ── */}
-        <p className="text-center text-[12px] font-bold">COMPROBANTE DE PAGO</p>
-        {cfg?.resolucion_numero ? (
+        {/* ── TÍTULO + resolución DIAN ── */}
+        <p className="text-center text-[13px] font-bold">
+          {esFactura ? 'FACTURA DE VENTA' : 'COMPROBANTE DE PAGO'}
+        </p>
+        {esFactura ? (
           <>
-            <p className="text-center">Res. DIAN {cfg.resolucion_numero}</p>
+            <p className="text-center">Resolución DIAN No. {cfg.resolucion_numero}</p>
+            {cfg?.resolucion_fecha ? (
+              <p className="text-center">de {cfg.resolucion_fecha}</p>
+            ) : null}
             <p className="text-center">
-              Prefijo {cfg.resolucion_prefijo} · Rango {cfg.resolucion_prefijo}-{cfg.resolucion_rango_ini} al {cfg.resolucion_prefijo}-{cfg.resolucion_rango_fin}
+              Prefijo {cfg.resolucion_prefijo} · Autorizado {cfg.resolucion_prefijo}-{cfg.resolucion_rango_ini} al {cfg.resolucion_prefijo}-{cfg.resolucion_rango_fin}
             </p>
             <p className="text-center">Vigencia: {cfg.resolucion_vigencia}</p>
           </>
@@ -188,13 +287,33 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
           <span>Medio de pago:</span><span className="font-bold">{metodoEtiqueta}</span>
         </div>
 
+        {/* ── BLOQUE DIGITAL: CUFE + QR (solo en modo factura) ── */}
+        {esFactura && cufe.length === 96 && (
+          <>
+            <p className="my-2 text-center">{'='.repeat(36)}</p>
+            <p className="text-center font-bold">CUFE</p>
+            {(cufe.match(/.{1,24}/g) ?? []).map((frag, i) => (
+              <p key={i} className="text-center text-[9px] leading-tight break-all">{frag}</p>
+            ))}
+            <div className="mt-2 flex justify-center">
+              <QrCodigo texto={urlQr} lado="22mm" />
+            </div>
+            <p className="mt-1 text-center text-[9px]">
+              Verifica tu factura en catalogo-vpfe.dian.gov.co
+            </p>
+          </>
+        )}
+
         <p className="my-2 text-center">{'='.repeat(36)}</p>
 
         {/* ── PIE legal + cortesía ── */}
         <p className="text-center">La propina es VOLUNTARIA</p>
         <p className="text-center">(Ley 1275 de 2009)</p>
-        <p className="mt-1 text-center">Facturado con {cfg?.software_nombre ?? 'Kārei'}</p>
-        {cfg?.software_nit ? <p className="text-center">NIT software {cfg.software_nit}</p> : null}
+        <p className="mt-1 text-center">
+          {esFactura ? 'Factura generada por ' : 'Facturado con '}
+          {cfg?.software_nombre ?? 'Kārei'}
+        </p>
+        {cfg?.software_nit ? <p className="text-center">NIT proveedor tecnológico {cfg.software_nit}</p> : null}
         <p className="mt-2 text-center font-bold">{cfg?.pie_gracias ?? '¡Gracias por su visita!'}</p>
       </div>
 
@@ -205,7 +324,7 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
           onClick={() => window.print()}
           className="rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg transition hover:bg-emerald-400"
         >
-          🖨️ Imprimir tirilla
+          {esFactura ? '🖨️ Imprimir factura' : '🖨️ Imprimir tirilla'}
         </button>
         <button
           type="button"
