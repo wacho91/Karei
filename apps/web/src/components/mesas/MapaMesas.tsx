@@ -1,4 +1,4 @@
-// src/components/mesas/MapaMesas.tsx — v2 (E-14x) · Mapa de mesas EN VIVO
+// src/components/mesas/MapaMesas.tsx — v3 (E-14y) · Mapa EN VIVO + ZONAS PLEGABLES
 // ─────────────────────────────────────────────────────────────────────────
 // QUÉ CAMBIA FRENTE AL MAPA VIEJO (el del repo original):
 // 1. SIN barra propia: ni botones fantasma, ni "Nueva mesa" duplicado,
@@ -14,6 +14,10 @@
 //    mesa.status) — nunca se rompe.
 // 4. Zonas agrupadas (Salón, Terraza...) con contador, mesa seleccionada
 //    resaltada, eliminar con confirmación (✕ al pasar el mouse).
+// 5. NUEVO v3 — ZONAS PLEGABLES (como en Recetas): clic en el título de una
+//    zona para recogerla o volver a mostrarla (animación suave). Botón
+//    "Recoger todas / Mostrar todas" junto a la línea En vivo. Lo recogido
+//    se recuerda entre recargas (localStorage).
 // Props que acepta (los mismos de siempre + 1 nuevo): mesas, ocupadas,
 //   seleccionar / alSeleccionar / onSeleccionar / alClick / onClick,
 //   eliminarMesa / onEliminar / eliminar, mesaSeleccionada (nuevo, id).
@@ -230,6 +234,19 @@ export function MapaMesas(props: any) {
   const [vivo, setVivo] = useState<Record<string, any>>({});
   const [resumen, setResumen] = useState<any>(null);
 
+  // ── ZONAS PLEGABLES (como en Recetas): se recogen y se vuelven a mostrar.
+  // Lo recogido se recuerda entre recargas en localStorage.
+  const [plegadas, setPlegadas] = useState<Record<string, boolean>>(() => {
+    try {
+      const g = JSON.parse(localStorage.getItem('karei-zonas-plegadas') ?? '{}');
+      return g && typeof g === 'object' ? g : {};
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('karei-zonas-plegadas', JSON.stringify(plegadas)); } catch { /* noop */ }
+  }, [plegadas]);
+  const toggleZona = (z: string) => setPlegadas((p) => ({ ...p, [z]: !p[z] }));
+
   // ── ESTADO EN VIVO: GET /pos/mapa cada 10 s (add-on E-14x) ──────────
   useEffect(() => {
     let montado = true;
@@ -311,6 +328,12 @@ export function MapaMesas(props: any) {
       nombreDe(a).localeCompare(nombreDe(b), 'es', { numeric: true }));
   }
 
+  const todasAbiertas = zonas.every((z) => !plegadas[z]);
+  const alternarTodas = () =>
+    setPlegadas(todasAbiertas
+      ? Object.fromEntries(zonas.map((z) => [z, true]))
+      : {});
+
   const ocupadasTotal = lista.reduce((acc, m) => acc + (infoDe(m).ocupada ? 1 : 0), 0);
   const res = resumen ?? {
     total_mesas: lista.length, ocupadas: ocupadasTotal,
@@ -344,42 +367,78 @@ export function MapaMesas(props: any) {
             ? ` · $${Number(res.consumo_abierto).toLocaleString('es-CO')} abierto`
             : ''}
         </span>
+        {zonas.length > 1 && (
+          <button
+            type="button"
+            onClick={alternarTodas}
+            className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[10px] font-semibold text-slate-400 transition-colors hover:border-amber-400/60 hover:text-amber-300"
+          >
+            {todasAbiertas ? 'Recoger todas' : 'Mostrar todas'}
+          </button>
+        )}
       </div>
 
       {zonas.map((z) => {
         const arr = gruposMap[z];
         const oc = arr.reduce((acc, m) => acc + (infoDe(m).ocupada ? 1 : 0), 0);
+        const abierta = !plegadas[z];
         return (
           <section key={z}>
-            <div className="mb-2 flex items-center gap-2 border-b border-slate-800 pb-1">
-              <h3 className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            {/* Título de zona = botón plegable (como en Recetas) */}
+            <button
+              type="button"
+              onClick={() => toggleZona(z)}
+              aria-expanded={abierta}
+              title={abierta ? 'Recoger zona' : 'Mostrar zona'}
+              className="group mb-2 flex w-full items-center gap-2 border-b border-slate-800 pb-1 text-left transition-colors hover:border-slate-600"
+            >
+              <span
+                className={
+                  'text-[10px] text-slate-500 transition-transform duration-200 group-hover:text-amber-300 ' +
+                  (abierta ? '' : '-rotate-90')
+                }
+              >
+                ▾
+              </span>
+              <h3 className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400 group-hover:text-slate-200">
                 {z}
               </h3>
               <span className="text-[10px] text-slate-600">
                 {arr.length} mesa{arr.length === 1 ? '' : 's'}{oc > 0 ? ` · ${oc} ocupada${oc === 1 ? '' : 's'}` : ''}
               </span>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-              {arr.map((m) => {
-                const inf = infoDe(m);
-                const selId = mesaSeleccionada != null ? String(mesaSeleccionada) : null;
-                const seleccionada =
-                  selId != null && selId !== '' &&
-                  [m?.id, m?.code, m?.nombre, m?.name].some(
-                    (k: any) => k != null && String(k) === selId);
-                return (
-                  <TarjetaMesa
-                    key={String(m?.id ?? m?.code ?? nombreDe(m))}
-                    mesa={m}
-                    ocupada={inf.ocupada}
-                    total={inf.total}
-                    nPedidos={inf.nPedidos}
-                    seleccionada={seleccionada}
-                    alElegir={elegir}
-                    alEliminar={quitar}
-                  />
-                );
-              })}
+            </button>
+            {/* Contenido plegable: animación suave de altura */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateRows: abierta ? '1fr' : '0fr',
+                transition: 'grid-template-rows 220ms ease',
+              }}
+            >
+              <div className="overflow-hidden" style={{ minHeight: 0 }}>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                  {arr.map((m) => {
+                    const inf = infoDe(m);
+                    const selId = mesaSeleccionada != null ? String(mesaSeleccionada) : null;
+                    const seleccionada =
+                      selId != null && selId !== '' &&
+                      [m?.id, m?.code, m?.nombre, m?.name].some(
+                        (k: any) => k != null && String(k) === selId);
+                    return (
+                      <TarjetaMesa
+                        key={String(m?.id ?? m?.code ?? nombreDe(m))}
+                        mesa={m}
+                        ocupada={inf.ocupada}
+                        total={inf.total}
+                        nPedidos={inf.nPedidos}
+                        seleccionada={seleccionada}
+                        alElegir={elegir}
+                        alEliminar={quitar}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </section>
         );
