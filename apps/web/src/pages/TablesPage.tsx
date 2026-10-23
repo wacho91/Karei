@@ -1,4 +1,9 @@
-// src/pages/TablesPage.tsx — v9 · POS Comedor
+// src/pages/TablesPage.tsx — v10 · POS Comedor
+// E-14w (limpieza UI): el encabezado queda SOLO con "+ Nueva mesa".
+//   Se retiran los botones "Mesas demo" y "Diagnóstico" (y su código:
+//   crearDemo / alDemo / diagnosticoPos). La barra vieja con botones
+//   fantasma que se ve a la izquierda vive DENTRO de MapaMesas.tsx y se
+//   limpia en ese archivo (se entrega aparte).
 // E-14v: al confirmar el COBRO se abre la TIRILLA (comprobante de pago)
 //   lista para imprimir en la térmica de 80mm — sale sola, sin clicks extra.
 // E-14u: cobrarEnVivo ACEPTA el body del PanelPago ({ method, tip }) y lo
@@ -25,7 +30,6 @@ import CajaSegura from '../components/mesas/CajaSegura';
 import PanelCuenta from './PanelCuenta';
 import Tirilla from '../components/facturacion/Tirilla';
 import * as apiModule from '../lib/api';
-import { diagnosticoPos } from '../lib/diagnosticoPos';
 import { toastOk, alertaError } from '../lib/alertas';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
@@ -60,7 +64,6 @@ export default function TablesPage() {
   const mesas: any[] = m.mesas ?? m.data ?? [];
   const recargar: () => any = m.recargar ?? m.cargar ?? (() => {});
   const crearMesa: (d: any) => any = m.crearMesa ?? m.crear ?? (async () => {});
-  const crearDemo: () => any = m.crearMesasDemo ?? m.crearDemo ?? m.crearMesas ?? (async () => {});
   const eliminarMesa = m.eliminarMesa ?? m.borrarMesa;
   const mesaActual = mesas.find((x: any) => String(x?.id) === String(pos.mesaId));
 
@@ -74,13 +77,6 @@ export default function TablesPage() {
       if (r === false) return;
       toastOk('Mesa creada'); setModalMesa(false); recargar();
     } catch (e: any) { alertaError(e?.message ?? 'No se pudo crear la mesa'); }
-  };
-
-  const alDemo = async () => {
-    try {
-      const r: any = await crearDemo();
-      toastOk(`Demo: ${r?.creadas ?? 0} creadas · ${r?.omitidas ?? 0} ya existían`); recargar();
-    } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
   };
 
   // COBRAR EN VIVO (E-14t3 + E-14u): POST /pos/tables/{id}/cobrar del add-on.
@@ -133,8 +129,6 @@ export default function TablesPage() {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold text-white mr-auto">POS · Comedor</h1>
         <button onClick={() => setModalMesa(true)} className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-sm font-semibold hover:bg-amber-400">＋ Nueva mesa</button>
-        <button onClick={alDemo} className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-sm hover:bg-slate-600">Mesas demo</button>
-        <button onClick={() => { try { (diagnosticoPos as any)(); } catch { /* ignora */ } }} className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 text-sm hover:bg-slate-800">Diagnóstico</button>
       </div>
       <div className="flex flex-col xl:flex-row gap-4 items-start">
         <div className="flex-1 w-full min-w-0">
