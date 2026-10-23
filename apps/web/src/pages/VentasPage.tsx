@@ -1,10 +1,14 @@
-// src/pages/VentasPage.tsx (E-14v) — HISTORIAL DE VENTAS + CIERRE DE CAJA
+// src/pages/VentasPage.tsx (E-14w) — HISTORIAL DE VENTAS + CIERRE DE CAJA + CUADRE
 // ----------------------------------------------------------------------------
 // QUÉ RESUELVE:
 //  · Historial de todos los pagos (karei_payments) con filtros por periodo
 //    y método + re-imprimir la tirilla de cualquier cobro 🧾.
 //  · CIERRE DE CAJA (Informe Z, requisito POS de la DIAN): totales de hoy
 //    por método, nº de cobros, propinas, rango de tirillas y horario.
+//  · 🖨️ CUADRE DEL DÍA (E-14w): botón que abre el INFORME Z IMPRIMIBLE —
+//    qué se vendió plato a plato, total de la venta, base/IVA y cuánto se
+//    recaudó por método (efectivo/nequi/tarjeta) con propinas aparte, con
+//    firmas de cajero y administrador. Componente CuadreDia.tsx.
 //  · ⚙ Datos del restaurante: los que salen en la tirilla (nombre, NIT,
 //    dirección, régimen, IVA, resolución DIAN, pie…). Cuando un cliente del
 //    SaaS reciba sus permisos, este mismo formulario es la base del modal
@@ -17,6 +21,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as apiModule from '../lib/api';
 import Tirilla from '../components/facturacion/Tirilla';
+import CuadreDia from '../components/facturacion/CuadreDia';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -93,6 +98,7 @@ export default function VentasPage() {
   const [periodo, setPeriodo] = useState<string>('semana');
   const [metodo, setMetodo] = useState<string>('');
   const [tirillaId, setTirillaId] = useState<any>(null);
+  const [cuadreAbierto, setCuadreAbierto] = useState(false);
   const [modalConfig, setModalConfig] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
   const [guardando, setGuardando] = useState(false);
@@ -183,9 +189,15 @@ export default function VentasPage() {
               {cierre?.tickets?.desde ? ` · tirillas ${cierre.tickets.desde} → ${cierre.tickets.hasta}` : ''}
             </p>
           </div>
-          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold text-emerald-300">
-            Total del día · {dinero(cierre?.total ?? 0)}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold text-emerald-300">
+              Total del día · {dinero(cierre?.total ?? 0)}
+            </span>
+            <button onClick={() => setCuadreAbierto(true)} title="Informe Z imprimible: qué se vendió + recaudo por método"
+              className="rounded-xl bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-400">
+              🖨️ Cuadre del día (Z)
+            </button>
+          </div>
         </header>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {(cierre?.por_metodo ?? []).map((m: any) => (
@@ -287,6 +299,11 @@ export default function VentasPage() {
       {/* ── MODAL TIRILLA ── */}
       {tirillaId && (
         <Tirilla pagoId={tirillaId} onCerrar={() => setTirillaId(null)} cerrar={() => setTirillaId(null)} />
+      )}
+
+      {/* ── MODAL CUADRE DEL DÍA (Informe Z imprimible) ── */}
+      {cuadreAbierto && (
+        <CuadreDia abierto onCerrar={() => setCuadreAbierto(false)} cerrar={() => setCuadreAbierto(false)} />
       )}
 
       {/* ── MODAL CONFIG DEL RESTAURANTE ── */}
