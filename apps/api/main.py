@@ -70,6 +70,20 @@ except ImportError:
         from apps.api.pos_cuenta_live import router as pos_cuenta_live_router
 app.include_router(pos_cuenta_live_router)
 
+# ── ★ NUEVO E-14v: pos_facturacion (TIRILLA + HISTORIAL + CIERRE DE CAJA) ──
+#     GET/PUT /pos/facturacion/config  ·  GET /pos/facturacion/pagos
+#     GET /pos/facturacion/cierre      ·  GET /pos/facturacion/factura/{id}
+# El archivo pos_facturacion.py va en la MISMA carpeta donde está tu
+# pos_cuenta_live.py (el try/except cubre app/, raíz y apps/api/).
+try:
+    from app.pos_facturacion import router as pos_facturacion_router
+except ImportError:
+    try:
+        from pos_facturacion import router as pos_facturacion_router
+    except ImportError:
+        from apps.api.pos_facturacion import router as pos_facturacion_router
+app.include_router(pos_facturacion_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
