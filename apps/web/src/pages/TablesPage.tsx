@@ -1,4 +1,6 @@
-// src/pages/TablesPage.tsx — v8 · POS Comedor
+// src/pages/TablesPage.tsx — v9 · POS Comedor
+// E-14v: al confirmar el COBRO se abre la TIRILLA (comprobante de pago)
+//   lista para imprimir en la térmica de 80mm — sale sola, sin clicks extra.
 // E-14u: cobrarEnVivo ACEPTA el body del PanelPago ({ method, tip }) y lo
 //   manda al backend → el pago queda registrado con su método y propina
 //   (karei_payments) y el reporte del dashboard lo desglosa. Si el panel
@@ -21,6 +23,7 @@ import * as Mn from '../components/mesas/ModalNuevaMesa';
 import * as Pp from '../components/mesas/PanelPago';
 import CajaSegura from '../components/mesas/CajaSegura';
 import PanelCuenta from './PanelCuenta';
+import Tirilla from '../components/facturacion/Tirilla';
 import * as apiModule from '../lib/api';
 import { diagnosticoPos } from '../lib/diagnosticoPos';
 import { toastOk, alertaError } from '../lib/alertas';
@@ -52,6 +55,7 @@ export default function TablesPage() {
   const [pagando, setPagando] = useState(false);
   const [cuentaParaPago, setCuentaParaPago] = useState<any>(null);
   const [cobrando, setCobrando] = useState(false);
+  const [tirillaPagoId, setTirillaPagoId] = useState<any>(null); // E-14v
 
   const mesas: any[] = m.mesas ?? m.data ?? [];
   const recargar: () => any = m.recargar ?? m.cargar ?? (() => {});
@@ -91,6 +95,7 @@ export default function TablesPage() {
       const d = r?.data ?? r;
       const met: string = d?.metodo_etiqueta ?? d?.metodo ?? '';
       toastOk(`Cuenta cobrada · ${d?.cobradas ?? 1} pedido(s) · $${Number(d?.total ?? 0).toLocaleString('es-CO')}${met ? ` · ${met}` : ''}`);
+      if (d?.pago_id) setTirillaPagoId(d.pago_id); // E-14v: tirilla al instante
       setPagando(false);
       setCuentaParaPago(null);
       recargar(); // refresca el mapa (mesa libre)
@@ -168,6 +173,11 @@ export default function TablesPage() {
           cobrando={cobrando}
           onCerrar={() => setPagando(false)} cerrar={() => setPagando(false)}
           onExito={() => { setPagando(false); recargar(); }} trasCobrar={() => { setPagando(false); recargar(); }} />
+      )}
+      {/* E-14v: TIRILLA del cobro recién hecho (imprime en térmica 80mm) */}
+      {tirillaPagoId && (
+        <Tirilla pagoId={tirillaPagoId}
+          onCerrar={() => setTirillaPagoId(null)} cerrar={() => setTirillaPagoId(null)} />
       )}
     </div>
   );

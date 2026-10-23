@@ -19,7 +19,7 @@
 //
 // SIN dependencias nuevas (react-query + ../lib/api).
 import { useQuery } from '@tanstack/react-query';
-import * as apiModule from '../lib/api';
+import * as apiModule from '@/lib/api';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
