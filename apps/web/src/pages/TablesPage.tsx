@@ -1,9 +1,8 @@
-// src/pages/TablesPage.tsx — v10 · POS Comedor
-// E-14w (limpieza UI): el encabezado queda SOLO con "+ Nueva mesa".
-//   Se retiran los botones "Mesas demo" y "Diagnóstico" (y su código:
-//   crearDemo / alDemo / diagnosticoPos). La barra vieja con botones
-//   fantasma que se ve a la izquierda vive DENTRO de MapaMesas.tsx y se
-//   limpia en ese archivo (se entrega aparte).
+// src/pages/TablesPage.tsx — v11 · POS Comedor
+// E-14x (mapa en vivo): pasa mesaSeleccionada al MapaMesas v2 (resalta la
+//   mesa abierta en el panel). El mapa NUEVO (components/mesas/MapaMesas.tsx
+//   v2) ya no trae barra propia ni botones fantasma y pinta el estado REAL
+//   (OCUPADA/LIBRE) consultando GET /pos/mapa cada 10 s.
 // E-14v: al confirmar el COBRO se abre la TIRILLA (comprobante de pago)
 //   lista para imprimir en la térmica de 80mm — sale sola, sin clicks extra.
 // E-14u: cobrarEnVivo ACEPTA el body del PanelPago ({ method, tip }) y lo
@@ -135,6 +134,7 @@ export default function TablesPage() {
           <CajaSegura nombre="Mapa de mesas">
             <MapaMesas mesas={mesas} ocupadas={m.ocupadas ?? []} seleccionar={sel} alSeleccionar={sel}
               onSeleccionar={sel} alClick={sel} onClick={sel}
+              mesaSeleccionada={pos.mesaId ?? null}
               eliminarMesa={eliminarMesa} onEliminar={eliminarMesa} eliminar={eliminarMesa} />
           </CajaSegura>
         </div>
