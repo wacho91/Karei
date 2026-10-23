@@ -12,6 +12,12 @@
 //
 // EXPORT extra: qrMatriz(texto, 'L'|'M') → matriz booleana[][] (para pruebas).
 // ----------------------------------------------------------------------------
+// FIX E-14z-b: faltaba el import de useMemo (la función render usaba useMemo
+// sin importarlo → "ReferenceError: useMemo is not defined" al abrir una
+// factura → el QR nunca se veía y el modal se caía). Una línea, cero cambios
+// de lógica: el encoder queda EXACTAMENTE igual al que pasó las pruebas con
+// decodificador real (12 casos M + 5 L + E2E).
+import { useMemo } from 'react';
 
 // ── Aritmética GF(256) para Reed-Solomon (polinomio primitivo 0x11d) ────────
 const EXP = new Uint8Array(512);
