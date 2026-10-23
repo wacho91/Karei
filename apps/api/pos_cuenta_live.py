@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_cuenta_live.py (E-14u) — CUENTA EN VIVO + COBRAR + REPORTES
-VERSION: E-14u · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14u"
+Kārei · pos_cuenta_live.py (E-14v) — CUENTA EN VIVO + COBRAR + REPORTES
+VERSION: E-14v · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14v"
 
 NUEVO EN E-14u (lo que pide el dashboard):
 · El POST cobrar AHORA REGISTRA el método de pago (efectivo/tarjeta/nequi)
@@ -543,7 +543,7 @@ def _cuenta_de_mesa(db, table_id: str) -> dict:
     ultima = pedidos[-1] if pedidos else None
     hay_cocina = bool(estados & {"sin_enviar", "en_cocina", "preparando"})
     return {
-        "version": "E-14u",
+        "version": "E-14v",
         "mesa_id": mesa["id"], "mesaId": mesa["id"], "table_id": mesa["id"],
         "mesa_nombre": nombre_mesa, "mesa": nombre_mesa, "table_name": nombre_mesa,
         "mesa_status": mesa.get("status"),
@@ -731,7 +731,7 @@ def cobrar_cuenta(table_id: str, payload: Optional[dict] = None, db=Depends(_db)
     if not nombre_mesa and mesa.get("number") is not None:
         nombre_mesa = f"Mesa {mesa['number']}"
     mesa["_nombre"] = nombre_mesa
-    pago_id = _registrar_pago(total, propina, metodo, mesa, cobradas_ids)
+    pago_id, ticket_no = _registrar_pago(total, propina, metodo, mesa, cobradas_ids)
 
     # Cerrar sesión abierta (transacción INDEPENDIENTE: si falla, no toca el cobro)
     try:
@@ -782,11 +782,12 @@ def cobrar_cuenta(table_id: str, payload: Optional[dict] = None, db=Depends(_db)
     except Exception as e:
         _log("cobrar: mesa sin liberar (no crítico):", e)
 
-    return {"version": "E-14u", "ok": True, "cobradas": n,
+    return {"version": "E-14v", "ok": True, "cobradas": n,
             "subtotal": total, "propina": propina, "total": total_final,
             "metodo": metodo,
             "metodo_etiqueta": _ETIQUETA_METODO.get(metodo, metodo.replace("_", " ").capitalize()),
-            "pago_id": pago_id, "mesa_id": mesa["id"], "currency": "COP"}
+            "pago_id": pago_id, "ticket_no": ticket_no,
+            "mesa_id": mesa["id"], "currency": "COP"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -811,6 +812,14 @@ def _asegurar_tabla_pagos() -> bool:
                 "table_id VARCHAR(32), table_name VARCHAR(80), method VARCHAR(30), "
                 "subtotal FLOAT, tip FLOAT, total FLOAT, n_orders INTEGER, "
                 "order_ids TEXT, currency VARCHAR(8))"))
+            # E-14v: consecutivo de tirilla (si la tabla ya existía, ALTER suave)
+            try:
+                cx.execute(text(
+                    f"ALTER TABLE {_TABLA_PAGOS} ADD COLUMN ticket_no INTEGER"))
+                _log("columna ticket_no añadida a", _TABLA_PAGOS)
+            except Exception as ea:
+                if "duplicate" not in str(ea).lower() and "exists" not in str(ea).lower():
+                    _log("ticket_no sin ALTER (no crítico):", ea)
         _PAGOS_LISTA["hecho"] = True
         _log("tabla de pagos lista:", _TABLA_PAGOS)
         return True
@@ -820,31 +829,44 @@ def _asegurar_tabla_pagos() -> bool:
 
 
 def _registrar_pago(subtotal: float, propina: float, metodo: str,
-                    mesa: dict, ordenes: list) -> Optional[str]:
+                    mesa: dict, ordenes: list) -> tuple:
     """Guarda el pago del cobro (hora LOCAL del servidor, para que 'hoy'
-    del reporte cuadre con tu reloj). Devuelve el id del pago o None."""
+    del reporte cuadre con tu reloj). E-14v: asigna el CONSECUTIVO de
+    tirilla (ticket_no = MAX+1). Devuelve (id_del_pago, ticket_no)."""
     if not _asegurar_tabla_pagos():
-        return None
+        return None, None
     pid = _uid()
     ahora_local = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+    # E-14v: siguiente consecutivo (por si un pago anterior falló a medias)
+    ticket = None
+    try:
+        with _engine.connect() as cx:
+            nx = cx.execute(text(
+                f"SELECT COALESCE(MAX(ticket_no),0)+1 FROM {_TABLA_PAGOS}")).scalar()
+            ticket = int(nx or 1)
+    except Exception as e:
+        _log("ticket_no sin leer (no crítico):", e)
+        ticket = None
     try:
         with _engine.begin() as cx:
             cx.execute(text(
                 f"INSERT INTO {_TABLA_PAGOS} (id, created_at, paid_at, table_id, "
                 "table_name, method, subtotal, tip, total, n_orders, order_ids, "
-                "currency) VALUES (:i,:c,:p,:t,:tn,:m,:s,:ti,:to,:n,:oi,'COP')"),
+                "currency, ticket_no) VALUES (:i,:c,:p,:t,:tn,:m,:s,:ti,:to,:n,:oi,'COP',:tk)"),
                 {"i": pid, "c": ahora_local, "p": ahora_local,
                  "t": str(mesa.get("id") or ""), "tn": str(mesa.get("_nombre") or ""),
                  "m": metodo, "s": round(float(subtotal or 0), 2),
                  "ti": round(float(propina or 0), 2),
                  "to": round(float(subtotal or 0) + float(propina or 0), 2),
-                 "n": len(ordenes or []), "oi": (",".join(ordenes or []))[:500]})
-        _log("pago registrado:", metodo, round(float(subtotal or 0) + float(propina or 0), 2),
-             "· mesa", mesa.get("id"))
-        return pid
+                 "n": len(ordenes or []), "oi": (",".join(ordenes or []))[:500],
+                 "tk": ticket})
+        _log("pago registrado:", metodo,
+             round(float(subtotal or 0) + float(propina or 0), 2),
+             "· mesa", mesa.get("id"), "· tirilla #", ticket)
+        return pid, ticket
     except Exception as e:
         _log("pago SIN registrar (no crítico):", e)
-        return None
+        return None, None
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -947,7 +969,7 @@ def reporte_pagos():
             "fecha": (f.strftime("%Y-%m-%d") if f else None),
         })
 
-    return {"version": "E-14u",
+    return {"version": "E-14v",
             "generado_en": ahora.isoformat(sep=" ", timespec="seconds"),
             "resumen": resumen, "por_metodo": por_metodo,
             "metodos": [m["metodo"] for m in por_metodo],
@@ -960,5 +982,5 @@ _log("E-14t2: CUENTA DE MESA EN VIVO lista → GET /pos/tables/{id}/cuenta "
      "(y bill, con/sin /pos) · solo lectura · sin auth ✓")
 _log("E-14t2+E-14t3: COBRAR CUENTA listo → POST /pos/tables/{id}/cobrar "
      "(y pay, con/sin /pos) · marca PAGADA + cierra sesión + libera mesa ✓")
-_log("E-14u: COBRAR registra método+propina en karei_payments · REPORTES → "
-     "GET /pos/reportes/pagos (efectivo/tarjeta/nequi · hoy/semana/mes) ✓")
+_log("E-14v: COBRAR asigna CONSECUTIVO DE TIRILLA (ticket_no) · REPORTES → "
+     "GET /pos/reportes/pagos · FACTURACIÓN → pos_facturacion.py ✓")
