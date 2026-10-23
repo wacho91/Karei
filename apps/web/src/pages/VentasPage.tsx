@@ -1,10 +1,14 @@
-// src/pages/VentasPage.tsx (E-14w) — HISTORIAL DE VENTAS + CIERRE DE CAJA + CUADRE
+// src/pages/VentasPage.tsx (E-14x) — HISTORIAL DE VENTAS + CIERRE DE CAJA + CUADRE
 // ----------------------------------------------------------------------------
 // QUÉ RESUELVE:
 //  · Historial de todos los pagos (karei_payments) con filtros por periodo
 //    y método + re-imprimir la tirilla de cualquier cobro 🧾.
 //  · CIERRE DE CAJA (Informe Z, requisito POS de la DIAN): totales de hoy
 //    por método, nº de cobros, propinas, rango de tirillas y horario.
+//  · E-14x: el Informe Z muestra la resolución DIAN activa (número, fecha,
+//    prefijo y rango autorizado). El CUFE/QR sigue viviendo en cada FACTURA
+//    (tirilla del cobro o re-impresión 🧾) — el Z es reporte interno y no
+//    lleva documento digital.
 //  · 🖨️ CUADRE DEL DÍA (E-14w): botón que abre el INFORME Z IMPRIMIBLE —
 //    qué se vendió plato a plato, total de la venta, base/IVA y cuánto se
 //    recaudó por método (efectivo/nequi/tarjeta) con propinas aparte, con
@@ -188,6 +192,20 @@ export default function VentasPage() {
               {cierre?.primer_pago ? ` · de ${cierre.primer_pago} a ${cierre.ultimo_pago}` : ''}
               {cierre?.tickets?.desde ? ` · tirillas ${cierre.tickets.desde} → ${cierre.tickets.hasta}` : ''}
             </p>
+            {/* E-14x: marco fiscal del día — la resolución activa que respalda
+                las tirillas del rango. Si algún día cambias de resolución en
+                ⚙, esta línea refleja la vigente al instante. */}
+            {config?.resolucion_numero ? (
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Resolución DIAN No. {config.resolucion_numero}
+                {config?.resolucion_fecha ? ` del ${config.resolucion_fecha}` : ''}
+                {config?.resolucion_prefijo ? ` · Prefijo ${config.resolucion_prefijo}` : ''}
+                {config?.resolucion_rango_ini && config?.resolucion_rango_fin
+                  ? ` · Autorizado ${config.resolucion_prefijo}-${config.resolucion_rango_ini} al ${config.resolucion_prefijo}-${config.resolucion_rango_fin}`
+                  : ''}
+                {` · CUFE y QR en cada factura 🧾`}
+              </p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold text-emerald-300">
