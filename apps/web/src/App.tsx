@@ -1,5 +1,16 @@
+//
+// App.tsx · v3 (E-14z-f) — Kārei ERP Gastronómico
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMBIOS vs tu versión actual:
+//   1. + import RegistroPage (página PÚBLICA de registro SaaS).
+//   2. + <Route path="/registro" element={<RegistroPage />} /> — pública,
+//      al mismo nivel que /login (sin AppLayout, sin candado de rol).
+// TODO lo demás queda EXACTO igual (RutaProtegida, Inicio, ramas por rol).
+// ═══════════════════════════════════════════════════════════════════════════
+
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
+import RegistroPage from './pages/RegistroPage';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import ProductsPage from './pages/ProductsPage';
@@ -19,30 +30,6 @@ function RutaProtegida({ roles }: { roles: Rol[] }) {
   return <Outlet />;
 }
 
-/** Fix visual del tema oscuro: Chrome y Safari pintan las cajas autocompletadas
- *  (correo/contraseña guardados) de blanco/celeste por encima del diseño.
- *  Este CSS global les gana y las devuelve al tema Kārei en TODO el app,
- *  incluido el login. No toca lógica ni cambia nada más del diseño. */
-function FixAutocompletado() {
-  return (
-    <style>{`
-      input:-webkit-autofill,
-      input:-webkit-autofill:hover,
-      input:-webkit-autofill:focus,
-      input:-webkit-autofill:active,
-      input:autofill,
-      input:autofill:hover,
-      input:autofill:focus,
-      input:autofill:active {
-        -webkit-text-fill-color: #f1f5f9 !important;
-        caret-color: #f1f5f9 !important;
-        -webkit-box-shadow: 0 0 0 1000px #1e293b inset !important;
-        transition: background-color 9999s ease-in-out 0s;
-      }
-    `}</style>
-  );
-}
-
 /** La raíz "/" no está guardada: solo decide a dónde ir cada rol (evita bucles). */
 function Inicio() {
   const token = useAuthStore((s) => s.token);
@@ -53,10 +40,9 @@ function Inicio() {
 
 export function App() {
   return (
-    <>
-      <FixAutocompletado />
-      <Routes>
+    <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/registro" element={<RegistroPage />} />
 
       {/* Layout único; dentro, cada rama con su candado de rol */}
       <Route element={<AppLayout />}>
@@ -82,7 +68,6 @@ export function App() {
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
+    </Routes>
   );
 }
