@@ -1,5 +1,9 @@
-// src/components/facturacion/CuadreDia.tsx (E-14y) — CUADRE DEL DÍA · INFORME Z
+// src/components/facturacion/CuadreDia.tsx (E-14z-d) — CUADRE DEL DÍA · INFORME Z
 // ----------------------------------------------------------------------------
+// v2 E-14z-d: SELLO DE MARCA Kārei al pie del papel (MarkKarei variante print,
+// negro vectorial con trazo grueso) — mismo patrón que la Tirilla v3: el
+// encabezado es del restaurante y el sello Kārei firma como proveedor
+// tecnológico junto a "Facturado con Kārei". Nada más cambió.
 // QUÉ RESUELVE: el reporte de cierre que se imprime y FIRMA al terminar el
 // día (el Informe Z que la DIAN pide al POS). En una sola hoja térmica 80mm:
 //   · LO QUE SE VENDIÓ: plato a plato con cantidades y total del día.
@@ -27,6 +31,7 @@
 import { useQuery } from '@tanstack/react-query';
 import * as apiModule from '@/lib/api';
 import QrCodigo from './QrCodigo';
+import { MarkKarei } from '@/components/brand/LogoKarei';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -257,10 +262,13 @@ export default function CuadreDia({ abierto = true, onCerrar, cerrar, className 
 
         <p className="my-2 text-center">{'='.repeat(36)}</p>
 
-        {/* ── PIE legal ── */}
+        {/* ── PIE legal + sello Kārei ── */}
         <p className="text-center">La propina es VOLUNTARIA</p>
         <p className="text-center">(Ley 1275 de 2009)</p>
-        <p className="mt-1 text-center">Facturado con {cfg?.software_nombre ?? 'Kārei'}</p>
+        <div className="mt-1.5 flex justify-center">
+          <MarkKarei size={34} variante="print" />
+        </div>
+        <p className="text-center">Facturado con {cfg?.software_nombre ?? 'Kārei'}</p>
 
         {/* ── FIRMAS (solo salen en el papel) ── */}
         <div className="mt-8 grid grid-cols-2 gap-4 text-center">
