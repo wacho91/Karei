@@ -1,11 +1,11 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14w) — FACTURACIÓN: TIRILLA + CAJA + CUADRE
+Kārei · pos_facturacion.py (E-14v) — FACTURACIÓN FASE 1: TIRILLA + CAJA
 ═════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
 Add-on INDEPENDIENTE (misma filosofía de pos_cuenta_live: no toca tus
-modelos, tus routers ni tu pos_compat.py). Agrega 5 piezas:
+modelos, tus routers ni tu pos_compat.py). Agrega 4 piezas:
 
   1. CONFIG DEL RESTAURANTE  → tabla karei_config (clave/valor) que SE CREA
      SOLA con datos ficticios estándar colombianos. Los editas desde la
@@ -20,13 +20,6 @@ modelos, tus routers ni tu pos_compat.py). Agrega 5 piezas:
      con valor unitario y total, subtotal, IVA (discriminado), propina
      voluntaria, forma de pago (contado), medio de pago (efectivo/nequi/
      tarjeta), "consumidor final", nombre del software.
-  5. CUADRE DEL DÍA IMPRIMIBLE → GET /pos/facturacion/cuadre — el Informe
-     Z listo para imprimir y firmar: LO QUE SE VENDIÓ (plato a plato con
-     cantidades), el TOTAL de la venta con base e IVA discriminados, y el
-     RECAUDO por método de pago (cuánto quedó en efectivo en caja, cuánto
-     entró por Nequi y cuánto por tarjeta — las "consignaciones" del día),
-     con las propinas aparte. Lo imprime el botón "🖨️ Cuadre del día" de
-     la página Ventas (componente CuadreDia.tsx).
 
 CONSECUTIVO DE TIRILLA
 ----------------------
@@ -48,15 +41,17 @@ INSTALACIÓN (2 líneas en main.py, JUNTO a las de pos_cuenta_live)
 ⚠ Colócalas ARRIBA de los include_router de los routers viejos.
 ============================================================================
 """
+import base64
 import datetime
 import glob
+import json
 import os
 import re
 import sys
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import create_engine, inspect as sa_inspect, text
 from sqlalchemy.orm import sessionmaker
 
@@ -147,6 +142,43 @@ _log("E-14w activo — DB:", DB_URL)
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# 1.b AISLAMIENTO POR TENANT (E-14w) — cada empresa solo ve SUS datos
+# ─────────────────────────────────────────────────────────────────────────
+# Del header Bearer leo el id del usuario (sin verificar firma: no hace
+# falta la clave) y el tenant lo saco de la FILA REAL en users.tenant_id.
+# Un token falsificado no da acceso a nada: sin fila en users no hay tenant.
+# Reglas de filtrado:
+#   · requester CON tenant → solo pagos con ESE tenant_id.
+#   · requester SIN tenant (legacy/dev) → solo pagos sin dueño (NULL).
+def _tenant_de_request(request) -> Optional[str]:
+    try:
+        auth = str(getattr(request, "headers", {}).get("authorization") or "")
+        if not auth.lower().startswith("bearer "):
+            return None
+        partes = auth.split(" ", 1)[1].strip().split(".")
+        if len(partes) < 2:
+            return None
+        pad = partes[1] + "=" * (-len(partes[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(pad))
+        uid = payload.get("sub") or payload.get("user_id") or payload.get("id")
+        if not uid:
+            return None
+        with _engine.connect() as cx:
+            fila = cx.execute(text("SELECT tenant_id FROM users WHERE id = :u"),
+                              {"u": str(uid)}).first()
+            return (str(fila[0]) if fila and fila[0] is not None else None)
+    except Exception as e:
+        _log("tenant sin resolver (sigo en modo legacy):", e)
+        return None
+
+
+def _filtrar_por_tenant(pagos: list, tenant: Optional[str]) -> list:
+    if tenant:
+        return [p for p in pagos if str(p.get("tenant_id") or "") == tenant]
+    return [p for p in pagos if p.get("tenant_id") in (None, "")]
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # 2. CONFIG DEL RESTAURANTE (karei_config) — datos ficticios estándar CO
 # ─────────────────────────────────────────────────────────────────────────
 # NOTA IVA: Cristian pidió "18%", pero el IVA estándar colombiano es 19%
@@ -216,6 +248,37 @@ def _config_dict() -> dict:
 # ─────────────────────────────────────────────────────────────────────────
 _TABLA_PAGOS = "karei_payments"
 _TKT_LISTO = {"hecho": False}
+_TENANT_LISTO = {"hecho": False}
+
+
+def _asegurar_tenant_pagos() -> bool:
+    """E-14w: columna tenant_id en karei_payments + backfill de los pagos
+    viejos (del demo, sin dueño) al tenant del admin admin@karei.app.
+    Así los tenants NUEVOS nacen con la caja en cero y jamás ven datos
+    de otro restaurante. Idempotente: corre una sola vez por proceso."""
+    if _TENANT_LISTO["hecho"]:
+        return True
+    try:
+        with _engine.begin() as cx:
+            try:
+                cx.execute(text(
+                    f"ALTER TABLE {_TABLA_PAGOS} ADD COLUMN tenant_id VARCHAR(36)"))
+                _log("columna tenant_id añadida a", _TABLA_PAGOS)
+            except Exception as ea:
+                if "duplicate" not in str(ea).lower() and "exists" not in str(ea).lower():
+                    _log("tenant_id sin ALTER (no crítico):", ea)
+            try:
+                cx.execute(text(
+                    f"UPDATE {_TABLA_PAGOS} SET tenant_id = ("
+                    "SELECT tenant_id FROM users WHERE email = 'admin@karei.app' "
+                    "LIMIT 1) WHERE tenant_id IS NULL"))
+            except Exception as eb:
+                _log("backfill de pagos viejos sin hacer (no crítico):", eb)
+        _TENANT_LISTO["hecho"] = True
+        return True
+    except Exception as e:
+        _log("aislamiento sin preparar (no crítico):", e)
+        return False
 
 
 def _asegurar_ticket_no() -> bool:
@@ -409,8 +472,11 @@ def guardar_config(payload: Optional[dict] = None):
 # 5.b HISTORIAL DE PAGOS — tabla de la página Ventas
 @router.get("/api/v1/pos/facturacion/pagos")
 @router.get("/api/v1/pos/facturacion/ventas")
-def historial_pagos(dias: int = 7, metodo: Optional[str] = None,
+def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = None,
                     limit: int = 100, offset: int = 0):
+    # E-14w: cada restaurante solo ve SUS cobros
+    _asegurar_tenant_pagos()
+    tenant = _tenant_de_request(request)
     pagos = []
     try:
         with _engine.connect() as cx:
@@ -422,6 +488,8 @@ def historial_pagos(dias: int = 7, metodo: Optional[str] = None,
         _log("historial: no pude leer pagos:", e)
         return {"version": "E-14w", "pagos": [], "n": 0, "total": 0,
                 "currency": "COP"}
+    # E-14w: fuera los pagos de otras empresas
+    pagos = _filtrar_por_tenant(pagos, tenant)
     desde = None
     if dias and int(dias) > 0:
         d0 = datetime.datetime.now() - datetime.timedelta(days=int(dias))
@@ -453,7 +521,10 @@ def historial_pagos(dias: int = 7, metodo: Optional[str] = None,
 # 5.c CIERRE DE CAJA (Informe Z — requisito POS de la DIAN)
 @router.get("/api/v1/pos/facturacion/cierre")
 @router.get("/api/v1/pos/facturacion/cierre-de-caja")
-def cierre_de_caja(fecha: Optional[str] = None):
+def cierre_de_caja(request: Request, fecha: Optional[str] = None):
+    # E-14w: el Informe Z de cada restaurante es SOLO suyo
+    _asegurar_tenant_pagos()
+    tenant = _tenant_de_request(request)
     f = None
     if fecha:
         try:
@@ -474,6 +545,8 @@ def cierre_de_caja(fecha: Optional[str] = None):
             pagos = [dict(x) for x in filas]
     except Exception as e:
         _log("cierre: no pude leer pagos:", e)
+    # E-14w: fuera los pagos de otras empresas
+    pagos = _filtrar_por_tenant(pagos, tenant)
     del_dia = []
     for p in pagos:
         fp = _fecha_de(p)
@@ -525,7 +598,8 @@ def cierre_de_caja(fecha: Optional[str] = None):
 # 5.d TIRILLA / FACTURA por pago_id — alimenta el componente Tirilla.tsx
 @router.get("/api/v1/pos/facturacion/factura/{pago_id}")
 @router.get("/api/v1/pos/facturacion/tirilla/{pago_id}")
-def factura_por_pago(pago_id: str, db=Depends(_db)):
+def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
+    _asegurar_tenant_pagos()
     try:
         f = db.execute(text(
             f"SELECT * FROM {_TABLA_PAGOS} WHERE id = :i"),
@@ -536,13 +610,28 @@ def factura_por_pago(pago_id: str, db=Depends(_db)):
     if not f:
         raise HTTPException(404, f"Pago {pago_id} no encontrado")
     pago = dict(f)
+    # E-14w: la tirilla de otro restaurante NO existe pa' ti (404)
+    te = _tenant_de_request(request)
+    if te is not None:
+        if str(pago.get("tenant_id") or "") != te:
+            raise HTTPException(404, f"Pago {pago_id} no encontrado")
+    elif pago.get("tenant_id") not in (None, ""):
+        raise HTTPException(404, f"Pago {pago_id} no encontrado")
 
     # Consecutivo perezoso: pagos viejos sin número lo reciben al verlos
     if pago.get("ticket_no") is None and _asegurar_ticket_no():
         try:
             with _engine.begin() as cx:
-                nx = cx.execute(text(
-                    f"SELECT COALESCE(MAX(ticket_no),0)+1 FROM {_TABLA_PAGOS}")).scalar()
+                # E-14w: consecutivo POR TENANT (cada restaurante su conteo)
+                te2 = pago.get("tenant_id")
+                if te2 is None:
+                    nx = cx.execute(text(
+                        f"SELECT COALESCE(MAX(ticket_no),0)+1 FROM {_TABLA_PAGOS} "
+                        "WHERE tenant_id IS NULL")).scalar()
+                else:
+                    nx = cx.execute(text(
+                        f"SELECT COALESCE(MAX(ticket_no),0)+1 FROM {_TABLA_PAGOS} "
+                        "WHERE tenant_id = :te"), {"te": te2}).scalar()
                 cx.execute(text(
                     f"UPDATE {_TABLA_PAGOS} SET ticket_no = :t WHERE id = :i"),
                     {"t": int(nx), "i": pago["id"]})
@@ -594,122 +683,3 @@ def factura_por_pago(pago_id: str, db=Depends(_db)):
                         "propina": propina, "total": total,
                         "leyenda_iva": ("IVA incluido en los precios"
                                         if incluido else "IVA por agregar")}}
-
-
-# 5.e CUADRE DEL DÍA — el Informe Z imprimible: qué se vendió + recaudo
-# Lo imprime el botón "🖨️ Cuadre del día" de la página Ventas (CuadreDia.tsx)
-@router.get("/api/v1/pos/facturacion/cuadre")
-@router.get("/api/v1/pos/facturacion/cuadre-del-dia")
-def cuadre_del_dia(fecha: Optional[str] = None, db=Depends(_db)):
-    f = None
-    if fecha:
-        try:
-            f = datetime.datetime.strptime(fecha, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(422, "fecha debe ser YYYY-MM-DD")
-    if f is None:
-        ahora = datetime.datetime.now()
-        f = datetime.datetime(ahora.year, ahora.month, ahora.day)
-    d1 = f + datetime.timedelta(days=1)
-
-    pagos = []
-    try:
-        with _engine.connect() as cx:
-            filas = cx.execute(text(
-                f"SELECT * FROM {_TABLA_PAGOS} "
-                "ORDER BY COALESCE(paid_at, created_at), rowid")).mappings().all()
-            pagos = [dict(x) for x in filas]
-    except Exception as e:
-        _log("cuadre: no pude leer pagos:", e)
-    del_dia = []
-    for p in pagos:
-        fp = _fecha_de(p)
-        if fp is not None and f <= fp < d1:
-            del_dia.append(p)
-
-    # ── LO QUE SE VENDIÓ: agrego los items de las órdenes de cada cobro ──
-    prod: dict = {}
-    for p in del_dia:
-        ids = [x for x in str(p.get("order_ids") or "").split(",") if x.strip()]
-        items = _items_de_ordenes(db, ids)
-        if not items:
-            # sin items legibles → una línea "Consumo en mesa" con el subtotal
-            st = float(p.get("subtotal") or 0)
-            if st <= 0:
-                continue
-            d0 = prod.get("Consumo en mesa") or {
-                "nombre": "Consumo en mesa", "cantidad": 0, "total": 0.0}
-            d0["cantidad"] += 1
-            d0["total"] += st
-            prod["Consumo en mesa"] = d0
-            continue
-        for it in items:
-            clave = str(it.get("nombre") or "Producto")
-            d0 = prod.get(clave) or {"nombre": clave, "cantidad": 0, "total": 0.0}
-            d0["cantidad"] += int(it.get("cantidad") or 1)
-            d0["total"] += float(it.get("total") or 0)
-            prod[clave] = d0
-    por_producto = sorted(
-        [{"nombre": v["nombre"], "cantidad": v["cantidad"],
-          "total": round(v["total"], 2)} for v in prod.values()],
-        key=lambda x: -x["total"])
-
-    # ── RECAUDO por método (los 3 canónicos SIEMPRE presentes + otros) ──
-    canon = ("efectivo", "tarjeta", "nequi")
-    por_metodo = []
-    for m in canon:
-        sel = [p for p in del_dia if str(p.get("method") or "") == m]
-        por_metodo.append({
-            "metodo": m, "n": len(sel),
-            "subtotal": round(sum(float(p.get("subtotal") or 0) for p in sel), 2),
-            "propina": round(sum(float(p.get("tip") or 0) for p in sel), 2),
-            "total": round(sum(float(p.get("total") or 0) for p in sel), 2)})
-    otros = [p for p in del_dia if str(p.get("method") or "") not in canon]
-    if otros:
-        por_metodo.append({
-            "metodo": "otros", "n": len(otros),
-            "subtotal": round(sum(float(p.get("subtotal") or 0) for p in otros), 2),
-            "propina": round(sum(float(p.get("tip") or 0) for p in otros), 2),
-            "total": round(sum(float(p.get("total") or 0) for p in otros), 2)})
-
-    # ── TOTALES del día + IVA discriminado (misma matemática de la tirilla) ──
-    cfg = _config_dict()
-    try:
-        pct = float(cfg.get("iva_pct") or 0)
-    except (TypeError, ValueError):
-        pct = 0.0
-    incluido = str(cfg.get("iva_incluido") or "si").strip().lower() in (
-        "si", "sí", "true", "1", "yes")
-    venta = round(sum(float(p.get("subtotal") or 0) for p in del_dia), 2)
-    propinas = round(sum(float(p.get("tip") or 0) for p in del_dia), 2)
-    if pct > 0 and incluido:
-        base = round(venta / (1 + pct / 100.0), 2)
-        iva = round(venta - base, 2)
-    elif pct > 0:
-        base = venta
-        iva = round(venta * pct / 100.0, 2)
-    else:
-        base, iva = venta, 0.0
-
-    tickets = [int(p.get("ticket_no")) for p in del_dia
-               if p.get("ticket_no") is not None]
-    horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
-    return {"version": "E-14w", "tipo": "CUADRE DEL DÍA (Informe Z)",
-            "fecha": f.strftime("%Y-%m-%d"),
-            "generado_en": _now(),
-            "currency": "COP",
-            "config": cfg,
-            "resumen": {"n_pagos": len(del_dia),
-                        "venta_total": venta,
-                        "propinas": propinas,
-                        "gran_total": round(venta + propinas, 2),
-                        "base": base, "iva": iva,
-                        "iva_pct": pct, "iva_incluido": incluido,
-                        "leyenda_iva": ("IVA incluido en los precios"
-                                        if incluido else "IVA por agregar")},
-            "por_producto": por_producto,
-            "por_metodo": por_metodo,
-            "primer_pago": (horas[0].strftime("%H:%M") if horas else None),
-            "ultimo_pago": (horas[-1].strftime("%H:%M") if horas else None),
-            "tickets": {"desde": _tirilla_no(min(tickets)) if tickets else None,
-                        "hasta": _tirilla_no(max(tickets)) if tickets else None}}
