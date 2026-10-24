@@ -1,25 +1,11 @@
 //
-// RegistroPage.tsx · E-14z-f (Fase SaaS — tramo 1 del onboarding)
+// RegistroPage.tsx · E-14z-g (Fase SaaS — tramo 1 del onboarding)
 // ═══════════════════════════════════════════════════════════════════════════
-// QUÉ ES
-// ------
-// Página PÚBLICA de registro de Kārei (sin sesión): el dueño del restaurante
-// crea su cuenta con un wizard de 4 pasos y sale con TODO listo:
-//   1 · Tu restaurante   → Tenant (trial 30 días) + Branch principal
-//   2 · Tu cuenta admin  → User ADMIN (pendiente de verificar correo)
-//   3 · Tu equipo        → Meseros/cocina con PIN (saltable)
-//   4 · Resumen          → POST /saas/registro → pantalla "revisa tu correo"
-//
-// El backend (saas_registro.py add-on) crea todo y devuelve el link de
-// verificación en modo dev. Al validar el correo: admin ACTIVE + equipo
-// ACTIVE → el PIN ya funciona. El equipo entra por la pestaña "equipo"
-// del login (PIN de 4), el admin por correo+contraseña (flujo existente).
-//
-// DÓNDE VA
-// --------
-// src/pages/RegistroPage.tsx
-// Y en App.tsx, junto a la ruta /login (público, sin AppLayout):
-//   <Route path="/registro" element={<RegistroPage />} />
+// ★ FIX E-14z-g (BUG DEL CURSOR): Campo y Chip estaban definidos ADENTRO
+//   de RegistroPage → cada tecla re-renderizaba la página, React veía un
+//   componente "nuevo" y DESMONTABA el input (se perdía cursor y foco).
+//   Ahora viven a nivel de módulo → el input sobrevive a los re-renders.
+// ★ SMTP: la pantalla final reacciona al campo email_enviado del backend.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState } from 'react';
@@ -41,6 +27,33 @@ type Miembro = { full_name: string; rol: 'WAITER' | 'KITCHEN'; pin: string };
 const EXTRAER = (r: any) => r?.data ?? r;
 
 const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+
+// ── Estilos compartidos (a nivel de módulo: nunca cambian de identidad) ──
+const inputCls =
+  'w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20';
+const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400';
+
+// ★ FIX CURSOR: Campo vive FUERA del componente. Si se define adentro,
+//   cada render crea un "tipo" nuevo y React remonta el <input> entero
+//   (desaparece el cursor a mitad de la escritura).
+const Campo = ({ k, etiqueta, placeholder, tipo = 'text', valor, onChange }: any) => (
+  <label className="block">
+    <span className={labelCls}>{etiqueta}</span>
+    <input type={tipo} value={valor[k] ?? ''} placeholder={placeholder}
+      onChange={(e) => onChange(k, e.target.value)} className={inputCls} />
+  </label>
+);
+
+const Chip = ({ activo, onClick, children }: any) => (
+  <button type="button" onClick={onClick}
+    className={`rounded-xl border px-4 py-2 text-sm font-semibold transition-all ${
+      activo
+        ? 'border-amber-500/60 bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30'
+        : 'border-slate-700 bg-slate-800/60 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+    }`}>
+    {children}
+  </button>
+);
 
 export default function RegistroPage() {
   const [paso, setPaso] = useState(0);
@@ -93,29 +106,6 @@ export default function RegistroPage() {
     }
   };
 
-  const inputCls =
-    'w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20';
-  const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400';
-
-  const Campo = ({ k, etiqueta, placeholder, tipo = 'text', valor, onChange }: any) => (
-    <label className="block">
-      <span className={labelCls}>{etiqueta}</span>
-      <input type={tipo} value={valor[k] ?? ''} placeholder={placeholder}
-        onChange={(e) => onChange(k, e.target.value)} className={inputCls} />
-    </label>
-  );
-
-  const Chip = ({ activo, onClick, children }: any) => (
-    <button type="button" onClick={onClick}
-      className={`rounded-xl border px-4 py-2 text-sm font-semibold transition-all ${
-        activo
-          ? 'border-amber-500/60 bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30'
-          : 'border-slate-700 bg-slate-800/60 text-slate-400 hover:border-slate-600 hover:text-slate-200'
-      }`}>
-      {children}
-    </button>
-  );
-
   // ══════════════════════════════════════════════ PANTALLA FINAL (creado)
   if (creado) {
     return (
@@ -125,14 +115,22 @@ export default function RegistroPage() {
           <h1 className="mt-4 text-xl font-black text-white">¡Ya casi, {admin.full_name.split(' ')[0]}!</h1>
           <p className="mt-2 text-sm text-slate-400">
             Tu restaurante <b className="text-slate-200">{restaurante.commercial_name}</b> quedó creado con
-            30 días de prueba. Te enviamos el link de verificación a:
+            30 días de prueba. Verifica tu correo para activar tu cuenta y la de tu equipo:
           </p>
           <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-bold text-amber-300">
             {admin.email}
           </p>
-          {creado?.verificacion_url && (
+          {creado?.email_enviado ? (
+            <p className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-300">
+              📬 El link de verificación salió por correo. Si no aparece en 1 minuto,
+              revisa las carpetas de spam o promociones.
+            </p>
+          ) : creado?.verificacion_url && (
             <div className="mt-4 rounded-xl border border-slate-700 bg-slate-800/50 p-3 text-left">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Modo desarrollo (sin SMTP)</p>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                {creado?.aviso ? 'Aviso del servidor' : 'Modo desarrollo (sin SMTP)'}
+              </p>
+              {creado?.aviso && <p className="mt-1 text-xs text-amber-300/90">{creado.aviso}</p>}
               <a href={creado.verificacion_url} className="mt-1 block break-all text-xs text-sky-400 underline decoration-sky-700 hover:text-sky-300">
                 {creado.verificacion_url}
               </a>
