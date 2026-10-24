@@ -84,6 +84,23 @@ except ImportError:
         from apps.api.pos_facturacion import router as pos_facturacion_router
 app.include_router(pos_facturacion_router)
 
+# ── ★ NUEVO E-14z-f: saas_registro (REGISTRO PÚBLICO + VERIFICAR CORREO) ──
+#     POST /saas/registro  → crea Tenant TRIAL 30 días + Branch principal
+#                            + ADMIN (pendiente) + equipo con PIN de 4 dígitos
+#     GET  /saas/verificar → el link del correo: activa admin + todo el equipo
+# El archivo saas_registro.py va en la MISMA carpeta donde está tu
+# pos_facturacion.py (el try/except cubre app/, raíz y apps/api/).
+# El enlace de verificación (dev, sin SMTP) se imprime en ESTA consola.
+try:
+    from app.saas_registro import router as saas_registro_router
+except ImportError:
+    try:
+        from saas_registro import router as saas_registro_router
+    except ImportError:
+        from apps.api.saas_registro import router as saas_registro_router
+app.include_router(saas_registro_router)
+print("[saas_registro] E-14z-f activo · POST /saas/registro · GET /saas/verificar")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
