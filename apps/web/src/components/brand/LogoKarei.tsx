@@ -1,11 +1,15 @@
-// LogoKarei.tsx — E-14z-c
+// LogoKarei.tsx — E-14z-c v2
 // Marca Kārei vectorial · Propuesta C: tenedor + cuchillo + cuchara formando la K.
 // Tenedor = pata vertical | Cuchillo = diagonal superior | Cuchara = diagonal inferior.
+//
+// v2: variante "print" con trazo MÁS GRUESO (strokeWidth 7 vs 5.5) — la
+// impresora térmica B/N rasteriza los trazos finos y los deja tenues o
+// invisibles. Con 7/120 a 34px el sello sale negro sólido en el papel.
 //
 // Usos:
 //   <MarkKarei size={32} variante="dark" />            → sidebar, junto al nombre "Kārei"
 //   <LogoKarei variante="light" sizeMark={72} />       → pantalla de login (mark + wordmark)
-//   <MarkKarei size={54} variante="print" className="mx-auto block" /> → encabezado de la tirilla
+//   <MarkKarei size={34} variante="print" />           → pie de tirilla / Informe Z
 //
 // Variantes:
 //   dark  → ámbar #F59E0B  (sobre fondos oscuros: sidebar slate, login oscuro)
@@ -20,6 +24,13 @@ const COLOR_VARIANTE: Record<Variante, string> = {
   print: '#000000',
 };
 
+// El print va más grueso: la térmica B/N se come el trazo fino.
+const STROKE_VARIANTE: Record<Variante, number> = {
+  dark: 5.5,
+  light: 5.5,
+  print: 7,
+};
+
 interface MarkKareiProps {
   size?: number;
   variante?: Variante;
@@ -29,6 +40,7 @@ interface MarkKareiProps {
 /** Solo el símbolo (la K de cubiertos), cuadrado 1:1. */
 export function MarkKarei({ size = 40, variante = 'dark', className = '' }: MarkKareiProps) {
   const c = COLOR_VARIANTE[variante];
+  const sw = STROKE_VARIANTE[variante];
   return (
     <svg
       viewBox="0 0 120 120"
@@ -38,7 +50,7 @@ export function MarkKarei({ size = 40, variante = 'dark', className = '' }: Mark
       role="img"
       aria-label="Kārei"
     >
-      <g fill="none" stroke={c} strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round">
+      <g fill="none" stroke={c} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
         {/* TENEDOR = pata vertical de la K */}
         <path d="M33 16 V31 M42 16 V31 M51 16 V31" />
         <path d="M33 31 H51" />
