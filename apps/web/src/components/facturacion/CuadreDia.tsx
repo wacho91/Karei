@@ -1,4 +1,4 @@
-// src/components/facturacion/CuadreDia.tsx (E-14w) — CUADRE DEL DÍA · INFORME Z
+// src/components/facturacion/CuadreDia.tsx (E-14y) — CUADRE DEL DÍA · INFORME Z
 // ----------------------------------------------------------------------------
 // QUÉ RESUELVE: el reporte de cierre que se imprime y FIRMA al terminar el
 // día (el Informe Z que la DIAN pide al POS). En una sola hoja térmica 80mm:
@@ -10,13 +10,23 @@
 //   · Rango de tirillas, horario (primer/último cobro) y firmas de
 //     Cajero(a) / Administrador(a).
 //
+// NUEVO E-14y (acordado con Cristian):
+//   · MARCO FISCAL DEL DÍA: línea de resolución DIAN activa (número, fecha,
+//     prefijo y rango autorizado) al pie, antes del legal.
+//   · SELLO DE CONTROL DEL CUADRE: un QR que codifica el resumen firmado del
+//     día (fecha · resolución · rango de tirillas · nº de cobros · venta ·
+//     recaudo · propinas) + un CÓDIGO DE CONTROL determinista (mismo día →
+//     mismo sello). Es un sello de CONTROL INTERNO: el CUFE y el QR de
+//     verificación DIAN viven en cada FACTURA DE VENTA, no en el Z.
+//
 // SE USA (en VentasPage): <CuadreDia abierto onCerrar={fn} />
 // IMPRIMIR: botón 🖨️ → window.print() con CSS que OCULTA la app y deja solo
 // el cuadre a 74mm (misma técnica probada de Tirilla.tsx).
 //
-// SIN dependencias nuevas (react-query + ../lib/api).
+// SIN dependencias nuevas (react-query + @/lib/api + QrCodigo propio).
 import { useQuery } from '@tanstack/react-query';
 import * as apiModule from '@/lib/api';
+import QrCodigo from './QrCodigo';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -33,6 +43,24 @@ const diaBonito = (s: any): string => {
 const horaDe = (s: any): string => {
   const m = String(s ?? '').match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/);
   return m ? m[1] : '';
+};
+
+/** Código de control determinista (16 hex en 4 grupos) a partir del resumen.
+ *  Mismo día → mismo código; sirve para comparar cuadres archivados. */
+const selloControl = (s: string): string => {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    a = ((a ^ s.charCodeAt(i)) * 0x01000193) >>> 0;
+    b = ((b + s.charCodeAt(i) * (i + 7)) * 2654435761) >>> 0;
+  }
+  const out: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    a = (a * 1664525 + 1013904223) >>> 0;
+    b = (b * 22695477 + 1) >>> 0;
+    out.push(((a >>> 7) ^ (b >>> 9)).toString(16).padStart(8, '0').slice(0, 4));
+  }
+  return out.join('-');
 };
 
 const ETIQUETA_METODO: Record<string, string> = {
@@ -107,6 +135,22 @@ export default function CuadreDia({ abierto = true, onCerrar, cerrar, className 
   const res: any = data?.resumen ?? {};
   const productos: any[] = Array.isArray(data?.por_producto) ? data.por_producto : [];
   const metodos: any[] = Array.isArray(data?.por_metodo) ? data.por_metodo : [];
+
+  // ── SELLO DEL CUADRE (E-14y): payload determinista del resumen del día ──
+  // Mismo día → mismo QR y mismo código de control (comparable entre copias).
+  const payloadSello = [
+    'KAREI-Z',
+    `F${String(data?.fecha ?? '')}`,
+    cfg?.resolucion_numero ? `R${cfg.resolucion_numero}` : 'R-',
+    data?.tickets?.desde && data?.tickets?.hasta
+      ? `T${data.tickets.desde}-${data.tickets.hasta}`
+      : 'T-',
+    `C${Number(res?.n_pagos ?? 0)}`,
+    `V${Number(res?.venta_total ?? 0).toFixed(2)}`,
+    `G${Number(res?.gran_total ?? 0).toFixed(2)}`,
+    `P${Number(res?.propinas ?? 0).toFixed(2)}`,
+  ].join('|');
+  const codigoSello = selloControl(payloadSello);
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 ${className}`}>
@@ -183,6 +227,33 @@ export default function CuadreDia({ abierto = true, onCerrar, cerrar, className 
         <div className="mt-1 flex justify-between border-t border-dashed border-slate-400 pt-1 text-[13px] font-bold">
           <span>RECAUDADO TOTAL</span><span>{dinero(res?.gran_total)}</span>
         </div>
+
+        {/* ── MARCO FISCAL DEL DÍA (E-14y): resolución activa que respalda
+            las tirillas del rango. Si cambia la resolución en ⚙, esta línea
+            refleja la vigente al instante. ── */}
+        {cfg?.resolucion_numero ? (
+          <>
+            <p className="my-2 text-center">{'='.repeat(36)}</p>
+            <p className="text-center">Resolución DIAN No. {cfg.resolucion_numero}</p>
+            {cfg?.resolucion_fecha ? <p className="text-center">de {cfg.resolucion_fecha}</p> : null}
+            {cfg?.resolucion_prefijo ? (
+              <p className="text-center">
+                Prefijo {cfg.resolucion_prefijo} · Autorizado {cfg.resolucion_prefijo}-{cfg.resolucion_rango_ini} al {cfg.resolucion_prefijo}-{cfg.resolucion_rango_fin}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+
+        {/* ── SELLO DE CONTROL DEL CUADRE (E-14y) ── */}
+        <p className="my-2 text-center">{'='.repeat(36)}</p>
+        <p className="text-center font-bold underline">SELLO DE CONTROL DEL CUADRE</p>
+        <div className="mt-2 flex justify-center">
+          <QrCodigo texto={payloadSello} lado="22mm" />
+        </div>
+        <p className="mt-1 text-center text-[10px]">Código de control: {codigoSello}</p>
+        <p className="mt-0.5 text-center text-[9px] italic">
+          Sello de control interno — el CUFE y el QR de verificación están en cada factura.
+        </p>
 
         <p className="my-2 text-center">{'='.repeat(36)}</p>
 
