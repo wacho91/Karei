@@ -1,6 +1,6 @@
 """
 ═══════════════════════════════════════════════════════════════════════════════
- Kārei · saas_registro.py  ·  E-14z-f  (Fase SaaS — registro + verificación)
+ Kārei · saas_registro.py  ·  E-14z-g  (Fase SaaS — registro + verificación)
 ═══════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
@@ -25,16 +25,38 @@ endpoints que cierran el flujo de registro SaaS:
 TU ROUTER NO SE TOCA: tu /auth/login ya exige status ACTIVE ("Debes
 verificar tu correo…") así que el flujo encaja sin cambiar una línea.
 
+★ NUEVO E-14z-g — ENVÍO REAL DE CORREO (SMTP)
+----------------------------------------------
+Sin configurar nada: modo dev (link en consola + en pantalla), igual que antes.
+
+Con SMTP configurado (variables de entorno, se leen al arrancar uvicorn):
+
+    KAREI_SMTP_HOST      ej: smtp.gmail.com
+    KAREI_SMTP_PORT      587 (STARTTLS, default) o 465 (SSL)
+    KAREI_SMTP_USER      el correo que envía, ej: notificaciones@tumarca.com
+    KAREI_SMTP_PASSWORD  la contraseña de APLICACIÓN (Gmail: 16 caracteres)
+    KAREI_SMTP_FROM      (opcional) correo visible en De:, por defecto USER
+
+Comportamiento:
+  · SMTP bien configurado  → envía el correo de verdad (HTML con la marca)
+                             y NO devuelve el link en la respuesta (seguro).
+  · SMTP sin configurar    → modo dev: link en consola + en pantalla.
+  · SMTP configurado pero falló el envío → el registro SÍ se crea, se
+                             devuelve el link con un "aviso" (no bloquea).
+
+GMAIL en 3 pasos: (1) activa Verificación en 2 pasos en la cuenta de Google,
+(2) entra a https://myaccount.google.com/apppasswords y crea una "Contraseña
+de aplicación" (16 letras), (3) usa esas 16 letras como KAREI_SMTP_PASSWORD
+(¡NO tu contraseña normal!). En Windows, define las variables en la MISMA
+terminal antes de uvicorn:
+    CMD:        set KAREI_SMTP_HOST=smtp.gmail.com  (una por línea)
+    PowerShell: $env:KAREI_SMTP_HOST="smtp.gmail.com"
+
 CÓMO MONTARLO (2 líneas en tu main.py, junto a los otros add-ons):
     from saas_registro import router as saas_registro_router
     app.include_router(saas_registro_router)
 
     (igual que hiciste con pos_facturacion — debajo de ese include)
-
-EMAIL (importante): NO hay SMTP conectado todavía. En desarrollo el link
-de verificación se imprime en la CONSOLA del backend y TAMBIÉN viene en
-la respuesta del registro (campo "verificacion_url") para no frenar las
-pruebas. Al conectar SMTP (Gmail app-password) se quita de la respuesta.
 
 Decisiones ya tomadas (decir si alguna se quiere distinta):
   · Trial: 30 días desde el registro (Tenant.trial_ends_at).
@@ -50,13 +72,20 @@ Decisiones ya tomadas (decir si alguna se quiere distinta):
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
+import asyncio
 import bcrypt
 import hashlib
+import os
 import re
 import secrets
+import smtplib
+import ssl
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from email.header import Header
+from email.mime.text import MIMEText
+from email.utils import formataddr
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -80,6 +109,91 @@ MAX_EQUIPO = 20
 ROLES_EQUIPO = ("WAITER", "KITCHEN")  # el ADMIN ya viene con la cuenta
 
 _log = lambda *a: print("[saas_registro]", *a)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 0. SMTP (correo real) — variables de entorno, cero dependencias nuevas
+# ─────────────────────────────────────────────────────────────────────────
+SMTP_HOST = os.getenv("KAREI_SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("KAREI_SMTP_PORT", "587").strip() or "587")
+SMTP_USER = os.getenv("KAREI_SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("KAREI_SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.getenv("KAREI_SMTP_FROM", "").strip() or SMTP_USER
+
+
+def _smtp_configurado() -> bool:
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
+
+def _enviar_correo_smtp(destino: str, asunto: str, html: str) -> Tuple[bool, str]:
+    """Envía el correo. Devuelve (ok, mensaje_de_error). NUNCA lanza."""
+    try:
+        msg = MIMEText(html, "html", "utf-8")
+        msg["Subject"] = Header(asunto, "utf-8")
+        msg["From"] = formataddr(("Kārei", SMTP_FROM))
+        msg["To"] = destino
+
+        if SMTP_PORT == 465:  # SSL directo (ej: algunos proveedores)
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+                s.login(SMTP_USER, SMTP_PASSWORD)
+                s.sendmail(SMTP_FROM, [destino], msg.as_string())
+        else:  # 587: STARTTLS (Gmail y la mayoría)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+                s.ehlo()
+                s.starttls(context=ssl.create_default_context())
+                s.ehlo()
+                s.login(SMTP_USER, SMTP_PASSWORD)
+                s.sendmail(SMTP_FROM, [destino], msg.as_string())
+        return True, ""
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+# Correo de verificación en HTML — maquetado con TABLAS (los clientes de
+# correo como Gmail Outlook eliminan <svg>, flex y grid; tablas siempre sirven)
+_PLANTILLA_CORREO = """\
+<!doctype html><html lang="es"><body style="margin:0;padding:24px;background:#0f172a;font-family:Arial,Helvetica,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+ <tr><td style="background:#1e293b;border-radius:16px 16px 0 0;padding:28px 32px;border-bottom:3px solid #f59e0b;">
+   <span style="font-size:26px;font-weight:800;color:#f59e0b;letter-spacing:1px;">K&#257;rei</span>
+   <span style="display:block;color:#94a3b8;font-size:12px;margin-top:4px;">El ERP gastron&oacute;mico colombiano</span>
+ </td></tr>
+ <tr><td style="background:#ffffff;padding:32px;">
+   <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Verifica tu correo, {nombre}</h1>
+   <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#334155;">
+     Tu restaurante <b style="color:#0f172a;">{restaurante}</b> ya tiene cuenta K&#257;rei con 30 d&iacute;as de prueba.
+     Solo falta un clic para activarla, a ti y a tu equipo:
+   </p>
+   <table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center" bgcolor="#f59e0b" style="border-radius:12px;">
+     <a href="{url}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#0f172a;text-decoration:none;">Verificar mi correo &#8594;</a>
+   </td></tr></table>
+   <p style="margin:26px 0 6px;font-size:12px;color:#64748b;">&iquest;El bot&oacute;n no funciona? Copia este enlace en tu navegador:</p>
+   <p style="margin:0;word-break:break-all;font-size:12px;color:#2563eb;">{url}</p>
+   <p style="margin:22px 0 0;font-size:12px;line-height:1.6;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:14px;">
+     El enlace vence en 48 horas. Al verificarlo, t&uacute; entras con tu correo y contrase&ntilde;a,
+     y tu equipo entra con su PIN de 4 d&iacute;gitos, desde el primer d&iacute;a.
+   </p>
+ </td></tr>
+ <tr><td style="background:#0f172a;border-radius:0 0 16px 16px;padding:16px 32px;text-align:center;">
+   <span style="font-size:11px;color:#475569;">Este correo hace parte del registro de tu restaurante en K&#257;rei. Si no fuiste t&uacute;, ign&oacute;ralo.</span>
+ </td></tr>
+</table>
+</td></tr></table></body></html>"""
+
+
+def _html_correo(nombre: str, restaurante: str, url: str) -> str:
+    return _PLANTILLA_CORREO.format(
+        nombre=nombre.split(" ")[0] or nombre,
+        restaurante=restaurante,
+        url=url,
+    )
+
+
+if _smtp_configurado():
+    print(f"[saas_registro] E-14z-g listo · SMTP activo → {SMTP_HOST}:{SMTP_PORT} (de {SMTP_FROM})")
+else:
+    print("[saas_registro] E-14z-g listo · SIN SMTP → link de verificación por consola/pantalla (dev)")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -295,23 +409,51 @@ async def registrar(payload: RegistroIn, request: Request, db: AsyncSession = De
     base = str(request.base_url).rstrip("/")  # http://localhost:8000
     verificacion_url = f"{base}/api/v1/saas/verificar?token={token_crudo}"
 
-    _log("=" * 60)
-    _log("REGISTRO NUEVO:", payload.restaurante.commercial_name, "·", tenant.slug)
-    _log("  admin:", email, "· equipo:", equipo_creados, "persona(s)")
-    _log("  EMAIL DE VERIFICACIÓN (dev, sin SMTP):")
-    _log("  " + verificacion_url)
-    _log("=" * 60)
+    # ── ★ E-14z-g: correo de verdad si hay SMTP; modo dev si no
+    asunto = f"Verifica tu correo · {payload.restaurante.commercial_name} en Kārei"
+    if _smtp_configurado():
+        email_enviado, error_envio = await asyncio.to_thread(
+            _enviar_correo_smtp, email, asunto,
+            _html_correo(payload.admin.full_name, payload.restaurante.commercial_name, verificacion_url),
+        )
+    else:
+        email_enviado, error_envio = False, ""
 
-    return {
-        "version": "E-14z-f",
+    if email_enviado:
+        _log("=" * 60)
+        _log("REGISTRO NUEVO:", payload.restaurante.commercial_name, "·", tenant.slug)
+        _log("  admin:", email, "· equipo:", equipo_creados, "persona(s)")
+        _log("  correo de verificación ENVIADO via SMTP →", email)
+        _log("=" * 60)
+    else:
+        _log("=" * 60)
+        _log("REGISTRO NUEVO:", payload.restaurante.commercial_name, "·", tenant.slug)
+        _log("  admin:", email, "· equipo:", equipo_creados, "persona(s)")
+        if _smtp_configurado():
+            _log("  ⚠️ SMTP configurado PERO el envío FALLÓ →", error_envio)
+        _log("  EMAIL DE VERIFICACIÓN (modo dev):")
+        _log("  " + verificacion_url)
+        _log("=" * 60)
+
+    resp = {
+        "version": "E-14z-g",
         "ok": True,
         "tenant": {"slug": tenant.slug, "commercial_name": tenant.commercial_name,
                    "trial_hasta": str(tenant.trial_ends_at)},
         "admin": {"email": email},
         "equipo_creados": equipo_creados,
-        # ⚠️ Quitar este campo cuando se conecte SMTP (solo dev)
-        "verificacion_url": verificacion_url,
+        "email_enviado": email_enviado,
     }
+    if not email_enviado:
+        # ⚠️ Solo en dev (o si el envío falló): el link se comparte en pantalla.
+        # Cuando el SMTP funcione estable, este campo deja de salir del backend.
+        resp["verificacion_url"] = verificacion_url
+        resp["aviso"] = (
+            f"No pude enviar el correo ({error_envio}). Mientras lo arreglamos, usa este link."
+            if _smtp_configurado() else
+            "Servidor sin SMTP configurado: usa este link (o configúralo con las variables KAREI_SMTP_*)."
+        )
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────
