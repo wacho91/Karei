@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAuthStore, type UsuarioSesion } from '../store/authStore';
 import PinPad from '@/components/auth/PinPad';
+import { LogoKarei } from '@/components/brand/LogoKarei';
 
 interface LoginResponse {
   access_token: string;
@@ -27,7 +28,7 @@ export default function LoginPage() {
   // ya con sesión → directo a su home
   if (token && usuario) return <Navigate to={homePorRol()} replace />;
 
-    const entrarAdmin = async (e: FormEvent) => {
+  const entrarAdmin = async (e: FormEvent) => {
     e.preventDefault();
     if (cargando) return;
     setMensajeError(null);
@@ -73,9 +74,9 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 px-4">
       <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-4xl font-black tracking-tight text-white">Kārei</h1>
-          <p className="mt-1 text-sm text-slate-400">ERP Gastronómico</p>
+        <div className="mb-8 flex flex-col items-center">
+          <LogoKarei variante="dark" sizeMark={84} />
+          <p className="mt-3 text-sm text-slate-400">ERP Gastronómico</p>
         </div>
 
         <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl backdrop-blur">

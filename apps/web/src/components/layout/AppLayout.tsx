@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuthStore, type Rol } from '../../store/authStore';
+import { MarkKarei } from '@/components/brand/LogoKarei';
 
 interface ItemNav {
   to: string;
@@ -59,12 +60,17 @@ export default function AppLayout() {
       {/* Sidebar oscuro */}
       <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-900 md:flex">
         <div className="border-b border-slate-800 px-5 py-5">
-          <p className="text-2xl font-black tracking-tight text-white">
-            Kārei<span className="text-amber-400">.</span>
-          </p>
-          <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/80">
-            ERP Gastronómico
-          </p>
+          <div className="flex items-center gap-2.5">
+            <MarkKarei size={34} variante="dark" />
+            <div>
+              <p className="text-2xl font-black tracking-tight text-white">
+                Kārei<span className="text-amber-400">.</span>
+              </p>
+              <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/80">
+                ERP Gastronómico
+              </p>
+            </div>
+          </div>
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-4">
@@ -114,7 +120,10 @@ export default function AppLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Barra superior + nav horizontal (móvil) */}
         <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3 md:hidden">
-          <p className="text-xl font-black text-white">Kārei<span className="text-amber-400">.</span></p>
+          <div className="flex items-center gap-2">
+            <MarkKarei size={24} variante="dark" />
+            <p className="text-xl font-black text-white">Kārei<span className="text-amber-400">.</span></p>
+          </div>
           <button onClick={salir} className="text-sm font-medium text-slate-400 hover:text-red-400">
             Salir
           </button>

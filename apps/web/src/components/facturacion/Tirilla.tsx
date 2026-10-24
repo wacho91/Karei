@@ -1,23 +1,22 @@
-// Kārei · Tirilla.tsx v2 (E-14z) — FACTURA DE VENTA / TIRILLA DE PAGO 80mm
+// Kārei · Tirilla.tsx v3 (E-14z-c) — FACTURA DE VENTA / TIRILLA DE PAGO 80mm
+// ----------------------------------------------------------------------------
+// v3: sello de marca Kārei (MarkKarei variante print, negro vectorial) en el
+// pie del papel, junto a "Facturado con Kārei" (proveedor tecnológico).
+// El encabezado sigue siendo del restaurante (nombre, NIT, resolución DIAN).
 // ----------------------------------------------------------------------------
 // QUÉ RESUELVE: al confirmar un cobro (o desde la página Ventas) se muestra
-// el comprobante estilo impresora térmica. Con la versión v2, cuando el
-// restaurante tiene resolución DIAN configurada (⚙ Datos del restaurante),
-// la tirilla asciende a FACTURA DE VENTA:
+// el comprobante estilo impresora térmica. Con resolución DIAN configurada
+// (⚙ Datos del restaurante) la tirilla asciende a FACTURA DE VENTA:
 //   · título "FACTURA DE VENTA" + resolución (número, fecha, prefijo, rango)
-//   · CUFE de 96 caracteres hex (SHA-384 real vía Web Crypto, determinista:
-//     reimprimir la misma factura da el mismo CUFE)
+//   · CUFE de 96 caracteres hex (SHA-384 real vía Web Crypto, determinista)
 //   · CÓDIGO QR de verificación estilo DIAN (catálogo VPFE) — encoder QR
 //     propio sin dependencias (QrCodigo.tsx, probado con decodificador real)
 //   · pie con el software proveedor y su NIT (proveedor tecnológico)
 // Sin resolución configurada sigue imprimiendo el COMPROBANTE DE PAGO de
-// siempre (art. 617 ET): razón social + NIT · consecutivo · fecha/hora ·
-// items con valor unitario · base e IVA discriminado · propina voluntaria
-// (Ley 1275 de 2009) · forma y medio de pago · consumidor final.
+// siempre (art. 617 ET).
 //
 // DOS MODOS:
-//   <Tirilla pagoId={id} onCerrar={fn} />      → descarga la factura del
-//                                                add-on y la muestra.
+//   <Tirilla pagoId={id} onCerrar={fn} />      → descarga la factura del add-on
 //   <Tirilla factura={data} onCerrar={fn} />   → ya tienes los datos.
 //
 // IMPRIMIR: botón → window.print() con CSS que OCULTA toda la app y deja
@@ -28,6 +27,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as apiModule from '../../lib/api';
 import QrCodigo from './QrCodigo';
+import { MarkKarei } from '@/components/brand/LogoKarei';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -306,10 +306,13 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
 
         <p className="my-2 text-center">{'='.repeat(36)}</p>
 
-        {/* ── PIE legal + cortesía ── */}
+        {/* ── PIE legal + sello Kārei + cortesía ── */}
         <p className="text-center">La propina es VOLUNTARIA</p>
         <p className="text-center">(Ley 1275 de 2009)</p>
-        <p className="mt-1 text-center">
+        <div className="mt-1.5 flex justify-center">
+          <MarkKarei size={26} variante="print" />
+        </div>
+        <p className="text-center">
           {esFactura ? 'Factura generada por ' : 'Facturado con '}
           {cfg?.software_nombre ?? 'Kārei'}
         </p>
