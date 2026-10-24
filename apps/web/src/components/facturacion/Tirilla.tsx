@@ -310,7 +310,7 @@ export default function Tirilla({ pagoId, factura, abierto = true, onCerrar, cer
         <p className="text-center">La propina es VOLUNTARIA</p>
         <p className="text-center">(Ley 1275 de 2009)</p>
         <div className="mt-1.5 flex justify-center">
-          <MarkKarei size={26} variante="print" />
+          <MarkKarei size={34} variante="print" />
         </div>
         <p className="text-center">
           {esFactura ? 'Factura generada por ' : 'Facturado con '}
