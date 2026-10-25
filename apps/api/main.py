@@ -45,6 +45,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── ★ NUEVO E-14x: pos_mesas (MAPA DE MESAS EN VIVO + CREAR + ELIMINAR) ──
+#     GET    /pos/mapa          → mapa agrupado por áreas (aislado por tenant)
+#     POST   /pos/mesas         → crear mesa (crea el área si es nueva)
+#     POST   /pos/mesas/limpiar → elimina TODAS las mesas sin historial de ventas
+#     DELETE /pos/mesas/{id}    → elimina UNA mesa solo si no tiene ventas
+# El archivo pos_mesas.py va en la MISMA carpeta donde está pos_compat.py
+# (el try/except cubre app/, raíz y apps/api/). Va PRIMERO para ganar
+# cualquier choque de rutas. El 404 de /api/v1/pos/mapa muere aquí.
+try:
+    from app.pos_mesas import router as pos_mesas_router
+except ImportError:
+    try:
+        from pos_mesas import router as pos_mesas_router
+    except ImportError:
+        from apps.api.pos_mesas import router as pos_mesas_router
+app.include_router(pos_mesas_router)
+print("[pos_mesas] E-14x activo · GET /pos/mapa · POST /pos/mesas · DELETE /pos/mesas/{id}")
+
 # ── pos_compat (comanda + cocina/kanban + entregar) ──────────────────────
 try:
     from app.pos_compat import router as pos_compat_router
