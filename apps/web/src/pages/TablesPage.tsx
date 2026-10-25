@@ -1,21 +1,15 @@
-// src/pages/TablesPage.tsx — v11 · POS Comedor
-// E-14x (mapa en vivo): pasa mesaSeleccionada al MapaMesas v2 (resalta la
-//   mesa abierta en el panel). El mapa NUEVO (components/mesas/MapaMesas.tsx
-//   v2) ya no trae barra propia ni botones fantasma y pinta el estado REAL
-//   (OCUPADA/LIBRE) consultando GET /pos/mapa cada 10 s.
-// E-14v: al confirmar el COBRO se abre la TIRILLA (comprobante de pago)
-//   lista para imprimir en la térmica de 80mm — sale sola, sin clicks extra.
-// E-14u: cobrarEnVivo ACEPTA el body del PanelPago ({ method, tip }) y lo
-//   manda al backend → el pago queda registrado con su método y propina
-//   (karei_payments) y el reporte del dashboard lo desglosa. Si el panel
-//   no manda nada, sigue funcionando igual que en v7 (efectivo · 0).
-// E-14t3: el botón Cobrar YA COBRA de verdad:
-//   1. PanelCuenta (en vivo) pasa la cuenta REAL al pulsar Cobrar → se guarda
-//      en estado y se le pasa a PanelPago (antes recibía pos.cuenta del hook
-//      viejo → null → "No hay cuenta abierta para cobrar").
-//   2. Al confirmar en el modal, se llama POST /pos/tables/{id}/cobrar del
-//      add-on: marca PAGADA, cierra sesión, libera la mesa y refresca todo.
-//   3. Fix del choque de nombres del v5 (el import nuevo ganaba) se mantiene.
+// src/pages/TablesPage.tsx — v10 · POS Comedor
+// E-14x: MAPA DE MESAS EN VIVO de verdad (usa el add-on pos_mesas.py):
+//   · Barra "En vivo · N mesas · X ocupadas · Y libres" (se refresca sola).
+//   · Botón "Limpiar sin ventas": elimina TODAS las mesas que no tienen
+//     historial de ventas (lo que pidió Cristian). Las que tienen ventas
+//     se conservan y el aviso lo explica.
+//   · El modal "Nueva mesa" JAMÁS se queda en "Creando...": si el backend
+//     rechaza (409 duplicado, 401...), el error sale y el botón vuelve.
+//   · Estado vacío guiado cuando el restaurante aún no tiene mesas.
+// E-14v (se mantiene): al confirmar el COBRO se abre la TIRILLA sola.
+// E-14u (se mantiene): cobrarEnVivo acepta { method, tip } del PanelPago.
+// E-14t3 (se mantiene): el botón Cobrar YA COBRA de verdad.
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Hm from '../hooks/useMesas';
@@ -29,6 +23,7 @@ import CajaSegura from '../components/mesas/CajaSegura';
 import PanelCuenta from './PanelCuenta';
 import Tirilla from '../components/facturacion/Tirilla';
 import * as apiModule from '../lib/api';
+import { diagnosticoPos } from '../lib/diagnosticoPos';
 import { toastOk, alertaError } from '../lib/alertas';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
@@ -48,6 +43,21 @@ const MenuRapido = mod(Mr, 'MenuRapido');
 const ModalNuevaMesa = mod(Mn, 'ModalNuevaMesa');
 const PanelPago = mod(Pp, 'PanelPago');
 
+// Barra "En vivo" (punto verde pulsante, igual al espíritu del mapa)
+function BarraEnVivo({ total, ocupadas, libres, cargando }: any) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5">
+      <span className="relative flex h-2 w-2">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+      </span>
+      <span className="text-xs font-semibold text-emerald-300">
+        {cargando ? 'Consultando…' : `En vivo · ${total} ${total === 1 ? 'mesa' : 'mesas'} · ${ocupadas} ocupadas · ${libres} libres`}
+      </span>
+    </div>
+  );
+}
+
 export default function TablesPage() {
   const mh: any = (Hm as any).useMesas ?? (Hm as any).default;
   const ph: any = (Hp as any).usePedido ?? (Hp as any).default;
@@ -59,23 +69,62 @@ export default function TablesPage() {
   const [cuentaParaPago, setCuentaParaPago] = useState<any>(null);
   const [cobrando, setCobrando] = useState(false);
   const [tirillaPagoId, setTirillaPagoId] = useState<any>(null); // E-14v
+  const [limpiando, setLimpiando] = useState(false);
 
   const mesas: any[] = m.mesas ?? m.data ?? [];
+  const total: number = Number(m.total ?? mesas.length) || 0;
+  const ocupadasN: number = Number(m.ocupadasCount ?? m.ocupadasN ?? 0) || 0;
+  const libres: number = Number(m.libres ?? Math.max(0, total - ocupadasN)) || 0;
   const recargar: () => any = m.recargar ?? m.cargar ?? (() => {});
   const crearMesa: (d: any) => any = m.crearMesa ?? m.crear ?? (async () => {});
+  const crearDemo: () => any = m.crearMesasDemo ?? m.crearDemo ?? m.crearMesas ?? (async () => {});
   const eliminarMesa = m.eliminarMesa ?? m.borrarMesa;
+  const limpiarSinVentas: () => any = m.limpiarSinVentas ?? m.limpiarSinHistorial ?? null;
   const mesaActual = mesas.find((x: any) => String(x?.id) === String(pos.mesaId));
 
   // Si el mapa manda la MESA completa, extraigo el id antes de guardar en el hook.
   const sel = (x: any) =>
     pos.seleccionar?.(x && typeof x === 'object' ? (x.id ?? x.code ?? x.name ?? x) : x);
 
+  // E-14x: crearMesa JAMÁS lanza (devuelve false y el motivo queda en
+  // m.errAccion). El modal lo cierra solo su dueño cuando todo salió bien.
   const alCrear = async (datos: any) => {
+    const r: any = await crearMesa(datos);
+    if (r === false) {
+      alertaError(m.errAccion ?? 'No se pudo crear la mesa');
+      return; // NO cerramos el modal: corrige y reintenta sin reescribir todo
+    }
+    toastOk(`Mesa «${r?.nombre ?? r?.name ?? 'nueva'}» creada en ${r?.area ?? 'Salón'}`);
+    setModalMesa(false);
+    recargar();
+  };
+
+  const alDemo = async () => {
     try {
-      const r: any = await crearMesa(datos);
-      if (r === false) return;
-      toastOk('Mesa creada'); setModalMesa(false); recargar();
-    } catch (e: any) { alertaError(e?.message ?? 'No se pudo crear la mesa'); }
+      const r: any = await crearDemo();
+      toastOk(`Demo: ${r?.creadas ?? 0} creadas · ${r?.omitidas ?? 0} ya existían`);
+      recargar();
+    } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
+  };
+
+  // E-14x: LIMPIAR MESAS SIN HISTORIAL DE VENTAS (masivo, con confirmación)
+  const alLimpiar = async () => {
+    if (!limpiarSinVentas || limpiando) return;
+    const ok = window.confirm(
+      'Se eliminarán TODAS las mesas que NO tienen historial de ventas.\n' +
+      'Las mesas con pedidos o pagos se conservan (trazabilidad contable).\n\n¿Continuar?');
+    if (!ok) return;
+    setLimpiando(true);
+    try {
+      const r: any = await limpiarSinVentas();
+      if (r === false) { alertaError(m.errAccion ?? 'No se pudo limpiar el mapa'); return; }
+      const el: number = r?.eliminadas ?? 0;
+      const co: number = r?.conservadas ?? 0;
+      toastOk(`Limpieza lista: ${el} ${el === 1 ? 'mesa eliminada' : 'mesas eliminadas'}` +
+        (co > 0 ? ` · ${co} conservada(s) por tener ventas` : ''));
+    } finally {
+      setLimpiando(false);
+    }
   };
 
   // COBRAR EN VIVO (E-14t3 + E-14u): POST /pos/tables/{id}/cobrar del add-on.
@@ -127,14 +176,34 @@ export default function TablesPage() {
     <div className="p-4 space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold text-white mr-auto">POS · Comedor</h1>
-        <button onClick={() => setModalMesa(true)} className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-sm font-semibold hover:bg-amber-400">＋ Nueva mesa</button>
+        <BarraEnVivo total={total} ocupadas={ocupadasN} libres={libres} cargando={m.cargandoMapa} />
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => setModalMesa(true)} className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-sm font-semibold hover:bg-amber-400">＋ Nueva mesa</button>
+        <button onClick={alDemo} className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-sm hover:bg-slate-600">Mesas demo</button>
+        {limpiarSinVentas && total > 0 && (
+          <button onClick={alLimpiar} disabled={limpiando}
+            className="px-3 py-1.5 rounded-lg border border-red-500/40 text-red-300 text-sm hover:bg-red-500/10 disabled:opacity-50"
+            title="Elimina todas las mesas que NO tienen historial de ventas">
+            {limpiando ? 'Limpiando…' : '🧹 Limpiar sin ventas'}
+          </button>
+        )}
+        <button onClick={() => { try { (diagnosticoPos as any)(); } catch { /* ignora */ } }} className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 text-sm hover:bg-slate-800">Diagnóstico</button>
+      </div>
+      {total === 0 && !m.cargando && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-center">
+          <p className="text-amber-200 font-semibold">Tu restaurante aún no tiene mesas en este mapa.</p>
+          <p className="text-sm text-slate-300 mt-1">
+            Crea la primera con <span className="text-amber-300 font-semibold">＋ Nueva mesa</span>
+            {' '}(ej. <em>Terraza 1</em>, área <em>Terraza</em>, 8 personas). Cada empresa ve SOLO sus mesas.
+          </p>
+        </div>
+      )}
       <div className="flex flex-col xl:flex-row gap-4 items-start">
         <div className="flex-1 w-full min-w-0">
           <CajaSegura nombre="Mapa de mesas">
-            <MapaMesas mesas={mesas} ocupadas={m.ocupadas ?? []} seleccionar={sel} alSeleccionar={sel}
+            <MapaMesas mesas={mesas} ocupadas={m.ocupadas ?? []} areas={m.areas} seleccionar={sel} alSeleccionar={sel}
               onSeleccionar={sel} alClick={sel} onClick={sel}
-              mesaSeleccionada={pos.mesaId ?? null}
               eliminarMesa={eliminarMesa} onEliminar={eliminarMesa} eliminar={eliminarMesa} />
           </CajaSegura>
         </div>
