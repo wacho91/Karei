@@ -1,6 +1,16 @@
+//
+// AppLayout.tsx · v4 (E-14z-i) — Kārei ERP Gastronómico
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMBIOS vs v3 (E-14z-e):
+//   1. + item de NAV «Correo» (solo ADMIN) → /correo (SMTP desde la app).
+// TODO lo demás queda EXACTO igual (NAV con roles, COLOR_ROL, logout,
+// MarkKarei en sidebar y header móvil, OnboardingWizard). Sin cambios de lógica.
+// ═══════════════════════════════════════════════════════════════════════════
+
 import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuthStore, type Rol } from '../../store/authStore';
 import { MarkKarei } from '@/components/brand/LogoKarei';
+import OnboardingWizard from '@/components/onboarding/OnboardingWizard';
 
 interface ItemNav {
   to: string;
@@ -29,6 +39,10 @@ const NAV: ItemNav[] = [
   {
     to: '/recetas', etiqueta: 'Recetas', roles: ['ADMIN'],
     d: 'M6 2h9l5 5v15H6V2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v-2H8v2Zm0 4h8v-2H8v2Z',
+  },
+  {
+    to: '/correo', etiqueta: 'Correo', roles: ['ADMIN'],
+    d: 'M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 4.24-8 5-8-5V6l8 5 8-5v2.24Z',
   },
 ];
 
@@ -148,6 +162,9 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Onboarding SaaS: solo ADMIN, solo mientras no esté configurado */}
+      <OnboardingWizard />
     </div>
   );
 }
