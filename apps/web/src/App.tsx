@@ -1,11 +1,11 @@
 //
-// App.tsx · v3 (E-14z-f) — Kārei ERP Gastronómico
+// App.tsx · v4 (E-14z-i) — Kārei ERP Gastronómico
 // ═══════════════════════════════════════════════════════════════════════════
-// CAMBIOS vs tu versión actual:
-//   1. + import RegistroPage (página PÚBLICA de registro SaaS).
-//   2. + <Route path="/registro" element={<RegistroPage />} /> — pública,
-//      al mismo nivel que /login (sin AppLayout, sin candado de rol).
-// TODO lo demás queda EXACTO igual (RutaProtegida, Inicio, ramas por rol).
+// CAMBIOS vs v3 (E-14z-f):
+//   1. + import CorreoConfigPage (SMTP configurable desde la app).
+//   2. + <Route path="correo" ... /> dentro de la rama SOLO ADMIN.
+// TODO lo demás queda EXACTO igual (registro público, RutaProtegida, Inicio,
+// ramas por rol). Sin cambios de lógica.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
@@ -18,6 +18,7 @@ import TablesPage from './pages/TablesPage';
 import RecetasPage from './pages/RecetasPage';
 import CocinaPage from './pages/CocinaPage';
 import VentasPage from './pages/VentasPage';
+import CorreoConfigPage from './pages/CorreoConfigPage';
 import { useAuthStore, type Rol } from './store/authStore';
 
 /** Exige sesión + uno de los roles (ADMIN pasa siempre, igual que el backend). */
@@ -53,6 +54,7 @@ export function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="ventas" element={<VentasPage />} />
           <Route path="recetas" element={<RecetasPage />} />
+          <Route path="correo" element={<CorreoConfigPage />} />
         </Route>
 
         {/* Meseros (ADMIN también puede) */}
