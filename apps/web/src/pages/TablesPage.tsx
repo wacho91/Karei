@@ -1,9 +1,15 @@
-// src/pages/TablesPage.tsx — v10 · POS Comedor
-// E-14x: MAPA DE MESAS EN VIVO de verdad (usa el add-on pos_mesas.py):
+// src/pages/TablesPage.tsx — v11 · POS Comedor
+// E-14t41: SWEETALERT2 EN TODA LA CUESTIÓN DE MESAS:
+//   · «🧹 Limpiar sin ventas» ya NO usa el confirm() nativo del navegador:
+//     ahora pide confirmación con confirmarAccion() (tema Kārei) y muestra
+//     el resumen (eliminadas/conservadas) en una ventana de éxito bonita.
+//   · El mapa (MapaMesas v2) también pide el confirm de eliminar con
+//     SweetAlert y pasa mesaId para resaltar la mesa abierta.
+//   · toastOk/alertaError siguen siendo las mismas funciones, pero ahora
+//     son toasts de SweetAlert (lib/alertas v2). NO se toca nada más.
+// E-14x (se mantiene): MAPA DE MESAS EN VIVO de verdad (add-on pos_mesas.py):
 //   · Barra "En vivo · N mesas · X ocupadas · Y libres" (se refresca sola).
-//   · Botón "Limpiar sin ventas": elimina TODAS las mesas que no tienen
-//     historial de ventas (lo que pidió Cristian). Las que tienen ventas
-//     se conservan y el aviso lo explica.
+//   · Botón "Limpiar sin ventas": elimina TODAS las mesas sin historial.
 //   · El modal "Nueva mesa" JAMÁS se queda en "Creando...": si el backend
 //     rechaza (409 duplicado, 401...), el error sale y el botón vuelve.
 //   · Estado vacío guiado cuando el restaurante aún no tiene mesas.
@@ -24,7 +30,7 @@ import PanelCuenta from './PanelCuenta';
 import Tirilla from '../components/facturacion/Tirilla';
 import * as apiModule from '../lib/api';
 import { diagnosticoPos } from '../lib/diagnosticoPos';
-import { toastOk, alertaError } from '../lib/alertas';
+import { toastOk, alertaError, confirmarAccion, avisoExito } from '../lib/alertas';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -43,7 +49,7 @@ const MenuRapido = mod(Mr, 'MenuRapido');
 const ModalNuevaMesa = mod(Mn, 'ModalNuevaMesa');
 const PanelPago = mod(Pp, 'PanelPago');
 
-// Barra "En vivo" (punto verde pulsante, igual al espíritu del mapa)
+// Barra "En vivo" (idéntica al espíritu del mapa: punto verde pulsante)
 function BarraEnVivo({ total, ocupadas, libres, cargando }: any) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5">
@@ -107,12 +113,19 @@ export default function TablesPage() {
     } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
   };
 
-  // E-14x: LIMPIAR MESAS SIN HISTORIAL DE VENTAS (masivo, con confirmación)
+  // E-14x + E-14t41: LIMPIAR MESAS SIN HISTORIAL DE VENTAS (masivo).
+  // E-14t41: el confirm() nativo del navegador se reemplaza por SweetAlert
+  // y el resultado sale en una ventana de éxito con el detalle completo.
   const alLimpiar = async () => {
     if (!limpiarSinVentas || limpiando) return;
-    const ok = window.confirm(
-      'Se eliminarán TODAS las mesas que NO tienen historial de ventas.\n' +
-      'Las mesas con pedidos o pagos se conservan (trazabilidad contable).\n\n¿Continuar?');
+    const ok = await confirmarAccion({
+      titulo: '¿Limpiar mesas sin ventas?',
+      texto:
+        'Se eliminarán TODAS las mesas que NO tienen historial de ventas.\n' +
+        'Las mesas con pedidos o pagos se conservan (trazabilidad contable).',
+      textoSi: 'Sí, limpiar el mapa',
+      peligro: true,
+    });
     if (!ok) return;
     setLimpiando(true);
     try {
@@ -120,8 +133,15 @@ export default function TablesPage() {
       if (r === false) { alertaError(m.errAccion ?? 'No se pudo limpiar el mapa'); return; }
       const el: number = r?.eliminadas ?? 0;
       const co: number = r?.conservadas ?? 0;
-      toastOk(`Limpieza lista: ${el} ${el === 1 ? 'mesa eliminada' : 'mesas eliminadas'}` +
-        (co > 0 ? ` · ${co} conservada(s) por tener ventas` : ''));
+      if (el === 0 && co === 0) {
+        await avisoExito('No había nada que limpiar', 'Todas las mesas tienen historial de ventas o el mapa está vacío.');
+      } else {
+        await avisoExito(
+          'Limpieza lista',
+          `Se eliminaron ${el} ${el === 1 ? 'mesa' : 'mesas'} sin ventas` +
+          (co > 0 ? ` y se conservaron ${co} con historial contable.` : '.'),
+        );
+      }
     } finally {
       setLimpiando(false);
     }
@@ -202,7 +222,7 @@ export default function TablesPage() {
       <div className="flex flex-col xl:flex-row gap-4 items-start">
         <div className="flex-1 w-full min-w-0">
           <CajaSegura nombre="Mapa de mesas">
-            <MapaMesas mesas={mesas} ocupadas={m.ocupadas ?? []} areas={m.areas} seleccionar={sel} alSeleccionar={sel}
+            <MapaMesas mesas={mesas} ocupadas={m.ocupadas ?? []} areas={m.areas} mesaId={pos.mesaId} seleccionar={sel} alSeleccionar={sel}
               onSeleccionar={sel} alClick={sel} onClick={sel}
               eliminarMesa={eliminarMesa} onEliminar={eliminarMesa} eliminar={eliminarMesa} />
           </CajaSegura>
