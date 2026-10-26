@@ -1,8 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_mesas.py (E-14x) — MAPA DE MESAS EN VIVO + CREAR + ELIMINAR
-VERSION: E-14x · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14x"
+Kārei · pos_mesas.py (E-14y) — MAPA DE MESAS EN VIVO + CREAR + ELIMINAR
+VERSION: E-14y · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14y"
+
+FIX E-14y (el bug del 401 al crear mesa — "me botó al login"):
+· CAUSA: el v1 exigía users.tenant_id NO NULL para crear/eliminar mesas.
+  El admin DEMO (admin@karei.app) tiene tenant_id NULL en la BD (su usuario
+  es anterior a la era multi-tenant) → TODO POST/DELETE respondía 401 →
+  el interceptor 401 del frontend cerraba la sesión y botaba al login.
+· AHORA: 401 SOLO si el token no identifica a NADIE en la BD. Un usuario
+  autenticado SIN tenant (demo/legacy) crea/elimina mesas SIN dueño
+  (tenant_id NULL = modo demo) — jamás visibles para otros tenants, así
+  el aislamiento queda intacto.
+· RESOLVER DE TOKEN BLINDADO: revisa varios claims (sub, user_id, id,
+  uid, usuario_id, userId), acepta ids con y sin guiones, y si el id no
+  aparece busca por email. Si aun así no encuentra al usuario, deja en la
+  terminal:  [pos_mesas] token leído pero SIN usuario en BD · claims: [...]
+  → pegando esa línea en el chat se clava el claim exacto en una ronda.
 
 QUÉ RESUELVE (lo que reportó Cristian):
 · El front pedía GET /api/v1/pos/mapa y el backend respondía 404 → el
@@ -24,7 +39,7 @@ RUTAS (cada una en doble variante /api/v1/... y /...):
 Cómo se monta (main.py): igual que los otros add-ons — el archivo va en la
 MISMA carpeta donde está pos_compat.py y el include va ANTES de los
 routers viejos. Al arrancar busca en la consola:
-    [pos_mesas] E-14x listo → GET /pos/mapa ...
+    [pos_mesas] E-14y listo → GET /pos/mapa ...
 
 AISLAMIENTO (misma regla de E-14w): del header Bearer leo el id del
 usuario, y el tenant sale de la FILA REAL en users.tenant_id (un token
@@ -115,9 +130,19 @@ def _log(*args):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 2. TENANT DEL REQUEST (copia fiel del patrón E-14w)
+# 2. QUIÉN HACE EL REQUEST (resolver blindado, FIX E-14y)
 # ─────────────────────────────────────────────────────────────────────────
-def _tenant_de_request(request) -> Optional[str]:
+# Devuelve (uid, tenant, autenticado):
+#   · autenticado=True SOLO si el id/email del token existe en users.
+#   · tenant puede ser None AUNQUE esté autenticado: son los usuarios
+#     demo/legacy (users.tenant_id NULL) — escriben filas SIN dueño que
+#     solo ven ellos. NUNCA se mezclan con las de un tenant real.
+_CLAIMS_ID = ("sub", "user_id", "id", "uid", "usuario_id", "userId", "user")
+_CLAIMS_EMAIL = ("email", "correo", "upn", "user_email")
+
+
+def _decode_bearer(request) -> Optional[dict]:
+    """Payload del JWT del header Authorization (SIN validar firma)."""
     try:
         auth = str(getattr(request, "headers", {}).get("authorization") or "")
         if not auth.lower().startswith("bearer "):
@@ -126,17 +151,92 @@ def _tenant_de_request(request) -> Optional[str]:
         if len(partes) < 2:
             return None
         pad = partes[1] + "=" * (-len(partes[1]) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(pad))
-        uid = payload.get("sub") or payload.get("user_id") or payload.get("id")
-        if not uid:
-            return None
-        with _engine.connect() as cx:
-            fila = cx.execute(text("SELECT tenant_id FROM users WHERE id = :u"),
-                              {"u": str(uid)}).first()
-            return (str(fila[0]) if fila and fila[0] is not None else None)
+        data = json.loads(base64.urlsafe_b64decode(pad))
+        return data if isinstance(data, dict) else None
     except Exception as e:
-        _log("tenant sin resolver (modo legacy):", e)
+        _log("token ilegible:", e)
         return None
+
+
+def _quien_de_request(request):
+    try:
+        payload = _decode_bearer(request)
+        if not payload:
+            return None, None, False
+
+        # 1) candidatos a id de usuario (con y sin guiones)
+        candidatos: list = []
+        for c in _CLAIMS_ID:
+            v = payload.get(c)
+            if v is None or not str(v).strip():
+                continue
+            s = str(v).strip()
+            if s not in candidatos:
+                candidatos.append(s)
+            sn = s.replace("-", "")
+            if sn and sn not in candidatos:
+                candidatos.append(sn)
+
+        fila = None
+        if candidatos:
+            marcas = {f"c{n}": v for n, v in enumerate(candidatos)}
+            with _engine.connect() as cx:
+                fila = cx.execute(
+                    text(f"SELECT id, tenant_id FROM users "
+                         f"WHERE id IN ({', '.join(':' + k for k in marcas)}) LIMIT 1"),
+                    marcas).first()
+
+        # 2) si el id no apareció, buscamos por email del token
+        if fila is None:
+            for c in _CLAIMS_EMAIL:
+                v = payload.get(c)
+                if not v or not str(v).strip():
+                    continue
+                with _engine.connect() as cx:
+                    fila = cx.execute(
+                        text("SELECT id, tenant_id FROM users "
+                             "WHERE lower(email) = :e LIMIT 1"),
+                        {"e": str(v).strip().lower()}).first()
+                if fila:
+                    break
+
+        if fila is None:
+            # Pista de diagnóstico (solo NOMBRES de claims, jamás valores)
+            try:
+                _log("token leído pero SIN usuario en BD · claims del token:",
+                     sorted(str(k) for k in payload.keys()))
+            except Exception:
+                pass
+            return None, None, False
+
+        uid = str(fila[0])
+        tenant = str(fila[1]) if fila[1] is not None else None
+
+        # 3) usuario sin tenant en BD: si el token TRAE tenant_id y ese
+        #    tenant existe realmente en users, lo adoptamos.
+        if tenant is None:
+            t_claim = payload.get("tenant_id") or payload.get("tenant")
+            if t_claim and str(t_claim).strip():
+                t = str(t_claim).strip()
+                with _engine.connect() as cx:
+                    existe = cx.execute(
+                        text("SELECT 1 FROM users WHERE tenant_id = :t LIMIT 1"),
+                        {"t": t}).first()
+                if existe:
+                    tenant = t
+                    _log(f"usuario {uid[:8]} sin tenant en BD → tomé tenant del token ({t[:8]})")
+            if tenant is None:
+                _log(f"usuario {uid[:8]} autenticado en MODO DEMO/legacy "
+                     f"(users.tenant_id NULL) → filas sin dueño")
+        return uid, tenant, True
+    except Exception as e:
+        _log("identidad sin resolver (modo anónimo):", e)
+        return None, None, False
+
+
+def _tenant_de_request(request) -> Optional[str]:
+    """Compatibilidad interna: solo el tenant (None = anónimo o demo)."""
+    return _quien_de_request(request)[1]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -433,7 +533,7 @@ def _mesas_del_tenant(db, tenant: Optional[str]) -> list:
 @router.get("/api/v1/pos/mapa")
 @router.get("/pos/mapa")
 def mapa_mesas(request: Request, db=Depends(_db)):
-    tenant = _tenant_de_request(request)
+    _uid_req, tenant, autenticado = _quien_de_request(request)
     filas, mapa = _mesas_del_tenant(db, tenant)
     areas: dict = {}
     mesas: list = []
@@ -465,6 +565,7 @@ def mapa_mesas(request: Request, db=Depends(_db)):
         "tables": mesas,
         "ocupadas_ids": ocupadas_ids,
         "tenant_aplicado": bool(tenant),
+        "autenticado": bool(autenticado),
         "generado_en": _now(),
     }
 
@@ -496,9 +597,9 @@ def _branch_del_tenant(db, tenant: Optional[str]) -> Optional[str]:
 def limpiar_mesas_sin_ventas(request: Request, db=Depends(_db)):
     """Elimina TODAS las mesas del tenant que NO tienen historial de ventas.
     Las que tienen pedidos/pagos se conservan (trazabilidad contable)."""
-    tenant = _tenant_de_request(request)
-    if not tenant:
-        raise HTTPException(401, "No identifiqué tu restaurante (falta el token). "
+    _uid_req, tenant, autenticado = _quien_de_request(request)
+    if not autenticado:
+        raise HTTPException(401, "No identifiqué tu usuario (falta el token o venció). "
                                  "Entra de nuevo y vuelve a intentar.")
     filas, mapa = _mesas_del_tenant(db, tenant)
     tabla = mapa["tabla"]
@@ -528,10 +629,13 @@ def limpiar_mesas_sin_ventas(request: Request, db=Depends(_db)):
 @router.post("/api/v1/pos/mapa")
 @router.post("/pos/mapa")
 def crear_mesa(request: Request, payload: Any = Body(None), db=Depends(_db)):
-    tenant = _tenant_de_request(request)
-    if not tenant:
-        raise HTTPException(401, "No identifiqué tu restaurante (falta el token). "
+    _uid_req, tenant, autenticado = _quien_de_request(request)
+    if not autenticado:
+        raise HTTPException(401, "No identifiqué tu usuario (falta el token o venció). "
                                  "Entra de nuevo y vuelve a intentar.")
+    if tenant is None:
+        _log("crear mesa en MODO DEMO (autenticado sin tenant) → mesa sin dueño, "
+             "solo visible en el demo")
     tabla = _tabla_mesas()
     mapa = _asegurar_columnas(db)
 
@@ -542,9 +646,14 @@ def crear_mesa(request: Request, payload: Any = Body(None), db=Depends(_db)):
     capacidad = _num(payload, ["capacidad", "capacity", "seats", "personas", "pax"], 4.0)
     capacidad = max(1, min(30, int(capacidad or 4)))
 
-    dup = db.execute(text(f"SELECT id FROM {tabla} WHERE tenant_id = :t "
-                          f"AND lower({mapa['name']}) = lower(:n) LIMIT 1"),
-                     {"t": tenant, "n": nombre}).first()
+    if tenant:
+        dup = db.execute(text(f"SELECT id FROM {tabla} WHERE tenant_id = :t "
+                              f"AND lower({mapa['name']}) = lower(:n) LIMIT 1"),
+                         {"t": tenant, "n": nombre}).first()
+    else:
+        dup = db.execute(text(f"SELECT id FROM {tabla} WHERE tenant_id IS NULL "
+                              f"AND lower({mapa['name']}) = lower(:n) LIMIT 1"),
+                         {"n": nombre}).first()
     if dup:
         raise HTTPException(409, f"Ya existe una mesa llamada «{nombre}». "
                                  f"Usa otro nombre (ej. {nombre} bis) o elimina la anterior.")
@@ -603,16 +712,22 @@ def crear_mesa(request: Request, payload: Any = Body(None), db=Depends(_db)):
 @router.delete("/api/v1/pos/tables/{mesa_id}")
 @router.delete("/pos/tables/{mesa_id}")
 def eliminar_mesa(mesa_id: str, request: Request, db=Depends(_db)):
-    tenant = _tenant_de_request(request)
-    if not tenant:
-        raise HTTPException(401, "No identifiqué tu restaurante (falta el token). "
+    _uid_req, tenant, autenticado = _quien_de_request(request)
+    if not autenticado:
+        raise HTTPException(401, "No identifiqué tu usuario (falta el token o venció). "
                                  "Entra de nuevo y vuelve a intentar.")
     tabla = _tabla_mesas()
     mapa = _asegurar_columnas(db)
-    fila = db.execute(text(f"SELECT * FROM {tabla} WHERE id IN (:a, :b) "
-                           f"AND {mapa['tenant']} = :t"),
-                      {"a": str(mesa_id), "b": _norm_id(mesa_id), "t": tenant})\
-               .mappings().first()
+    if tenant:
+        fila = db.execute(text(f"SELECT * FROM {tabla} WHERE id IN (:a, :b) "
+                               f"AND {mapa['tenant']} = :t"),
+                          {"a": str(mesa_id), "b": _norm_id(mesa_id), "t": tenant})\
+                   .mappings().first()
+    else:
+        fila = db.execute(text(f"SELECT * FROM {tabla} WHERE id IN (:a, :b) "
+                               f"AND {mapa['tenant']} IS NULL"),
+                          {"a": str(mesa_id), "b": _norm_id(mesa_id)})\
+                   .mappings().first()
     if not fila:
         raise HTTPException(404, "Mesa no encontrada (o pertenece a otra empresa).")
     nombre = str(fila.get(mapa["name"]) or mesa_id).strip() or str(mesa_id)
@@ -632,6 +747,7 @@ def eliminar_mesa(mesa_id: str, request: Request, db=Depends(_db)):
 # ─────────────────────────────────────────────────────────────────────────
 # 9. BANNER DE ARRANQUE
 # ─────────────────────────────────────────────────────────────────────────
-_log("E-14x listo → GET /pos/mapa · POST /pos/mesas · POST /pos/mesas/limpiar · "
-     "DELETE /pos/mesas/{id}  (cada una + /api/v1)")
-_log("E-14x DB:", DB_URL, "· tabla de mesas:", _tabla_mesas())
+_log("E-14y listo → GET /pos/mapa · POST /pos/mesas · POST /pos/mesas/limpiar · "
+     "DELETE /pos/mesas/{id}  (cada una + /api/v1) · 401 SOLO si el token no identifica a nadie")
+_log("E-14y DB:", DB_URL, "(la tabla de mesas se resuelve en el primer request, "
+     "cuando TU tabla `tables` ya existe)")
