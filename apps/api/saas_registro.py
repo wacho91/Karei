@@ -1,7 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════════
- Kārei · saas_registro.py  ·  E-14z-i  (Fase SaaS — registro + verificación
-                                        + CORREO configurable DESDE LA APP)
+ Kārei · saas_registro.py  ·  E-14z-i + FIX E-14y3  (Fase SaaS — registro
+                    + verificación + CORREO configurable DESDE LA APP)
 ═══════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
@@ -296,43 +296,104 @@ def _html_prueba(host: str, puerto: int) -> str:
 
 
 if _env_configurado():
-    print(f"[saas_registro] E-14z-i listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
+    print(f"[saas_registro] E-14y3 listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
           f" (en la app también puedes guardarlo: menú Correo, y esa config tiene prioridad)")
 else:
-    print("[saas_registro] E-14z-i listo · correo se configura desde la APP (menú Correo)"
+    print("[saas_registro] E-14y3 listo · correo se configura desde la APP (menú Correo)"
           " · sin config → modo dev (link por consola/pantalla)")
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # 0c. Auth de los endpoints de correo — ADMIN verificado CONTRA LA BD
+#     FIX E-14y3: el resolver viejo hacía int(sub) y Kārei usa IDs UUID
+#     (string con guiones) → int() explotaba → 401 fantasma que botaba al
+#     admin al login al abrir el menú Correo. Ahora usa el mecanismo
+#     probado de pos_mesas E-14y: candidatos de id STRING (con/sin
+#     guiones) + búsqueda por email de respaldo.
 # ─────────────────────────────────────────────────────────────────────────
-def _uid_de_token(request: Request) -> Optional[int]:
-    """Saca el user id del JWT SIN verificar firma (solo para BUSCAR al
-    usuario en la BD; el permiso real se resuelve ahí, igual que en
-    pos_cuenta_live — un token inventado no encuentra usuario y da 401)."""
-    auth = request.headers.get("authorization") or ""
-    if not auth.lower().startswith("bearer "):
-        return None
-    token = auth.split(" ", 1)[1].strip()
+_CLAIMS_ID = ("sub", "user_id", "id", "uid", "usuario_id", "userId", "user")
+_CLAIMS_EMAIL = ("email", "correo", "upn", "user_email")
+
+
+def _payload_bearer(request: Request) -> Optional[dict]:
+    """Payload del JWT del header Authorization (SIN validar firma). Solo
+    para BUSCAR al usuario en la BD: un token inventado no encuentra a
+    nadie y da 401, igual que en pos_mesas."""
     try:
-        parte = token.split(".")[1]
-        parte += "=" * (-len(parte) % 4)
-        datos = json.loads(base64.urlsafe_b64decode(parte))
-        crudo = datos.get("sub") or datos.get("user_id") or datos.get("id")
-        return int(crudo) if crudo is not None else None
+        auth = str(getattr(request, "headers", {}).get("authorization") or "")
+        if not auth.lower().startswith("bearer "):
+            return None
+        partes = auth.split(" ", 1)[1].strip().split(".")
+        if len(partes) < 2:
+            return None
+        pad = partes[1] + "=" * (-len(partes[1]) % 4)
+        data = json.loads(base64.urlsafe_b64decode(pad))
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
 
+def _candidatos_id(payload: dict) -> list:
+    """IDs de usuario candidatos desde los claims: valor tal cual + versión
+    sin guiones (cubre UUID '28c852c9-...' y '28c852c9...' y numéricos)."""
+    candidatos: list = []
+    for c in _CLAIMS_ID:
+        v = (payload or {}).get(c)
+        if v is None or not str(v).strip():
+            continue
+        s = str(v).strip()
+        if s not in candidatos:
+            candidatos.append(s)
+        sn = s.replace("-", "")
+        if sn and sn not in candidatos:
+            candidatos.append(sn)
+    return candidatos
+
+
+def _emails_de(payload: dict) -> list:
+    """Emails candidatos desde los claims (respaldo si el id no aparece)."""
+    out: list = []
+    for c in _CLAIMS_EMAIL:
+        v = (payload or {}).get(c)
+        if v and str(v).strip():
+            e = str(v).strip().lower()
+            if e not in out:
+                out.append(e)
+    return out
+
+
 async def _exigir_admin(request: Request, db: AsyncSession) -> User:
-    uid = _uid_de_token(request)
-    if uid is None:
+    payload = _payload_bearer(request)
+    u: Optional[User] = None
+
+    if payload:
+        # 1) por id (acepta UUID/string/numérico, con y sin guiones)
+        cand = _candidatos_id(payload)
+        if cand:
+            u = (await db.execute(
+                select(User).where(User.id.in_(cand)).limit(1)
+            )).scalar_one_or_none()
+
+        # 2) si el id no apareció, por email del token
+        if u is None:
+            for e in _emails_de(payload):
+                u = (await db.execute(
+                    select(User)
+                    .where(func.lower(User.email) == e).limit(1)
+                )).scalar_one_or_none()
+                if u is not None:
+                    break
+
+    if u is None:
+        # Pista de diagnóstico (solo NOMBRES de claims, jamás valores)
+        try:
+            if payload:
+                _log("token leído pero SIN usuario en BD · claims del token:",
+                     sorted(str(k) for k in payload.keys()))
+        except Exception:
+            pass
         raise HTTPException(401, "Inicia sesión para administrar el correo.")
-    u = (await db.execute(
-        select(User).where(User.id == uid)
-    )).scalar_one_or_none()
-    if not u:
-        raise HTTPException(401, "Sesión no válida: inicia sesión de nuevo.")
+
     codes = (await db.execute(
         select(Role.code).join(UserRole, UserRole.role_id == Role.id)
         .where(UserRole.user_id == u.id)
