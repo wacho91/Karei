@@ -1,8 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_mesas.py (E-14y) — MAPA DE MESAS EN VIVO + CREAR + ELIMINAR
-VERSION: E-14y · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14y"
+Kārei · pos_mesas.py (E-14y2) — MAPA DE MESAS EN VIVO + CREAR + ELIMINAR
+VERSION: E-14y2 · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14y2"
+
+FIX E-14y2 (el IntegrityError "NOT NULL constraint failed: tables.code"):
+· CAUSA: tu tabla `tables` REAL exige columnas que el INSERT no mandaba
+  (code NOT NULL; y is_active sin default). Solo pasaba en TU BD porque
+  los tests creaban su propia tabla sin esas restricciones.
+· AHORA el INSERT se arma mirando el ESQUEMA REAL de la tabla:
+    · code → se genera ÚNICO por dueño desde el nombre ('Terraza 2' →
+      'TERRAZA-2'; si ya existe → 'TERRAZA-2-2', '-3', ...).
+    · is_active → siempre 1 (las rutas viejas filtran is_active = 1; sin
+      eso la mesa nacía invisible para el dashboard/rutas viejas).
+    · CUALQUIER otra columna NOT NULL sin default se llena sola con un
+      valor sensato (y queda avisado en la terminal qué llenó).
+· status: JAMÁS fuera del enum real del ORM. El escáner ahora encuentra
+  los enums aunque los modelos estén declarados con Base (antes escribía
+  'LIBRE' y eso envenena la fila — la lección E-14i otra vez). En tu BD
+  queda 'AVAILABLE' y el dashboard/rutas viejas NO se caen.
+· Si igualmente fallara algo rarísimo, el error sale LIMPIO en el modal
+  (500 con la columna exacta), sin traceback ASGI pelado.
 
 FIX E-14y (el bug del 401 al crear mesa — "me botó al login"):
 · CAUSA: el v1 exigía users.tenant_id NO NULL para crear/eliminar mesas.
@@ -39,7 +57,7 @@ RUTAS (cada una en doble variante /api/v1/... y /...):
 Cómo se monta (main.py): igual que los otros add-ons — el archivo va en la
 MISMA carpeta donde está pos_compat.py y el include va ANTES de los
 routers viejos. Al arrancar busca en la consola:
-    [pos_mesas] E-14y listo → GET /pos/mapa ...
+    [pos_mesas] E-14y2 listo → GET /pos/mapa ...
 
 AISLAMIENTO (misma regla de E-14w): del header Bearer leo el id del
 usuario, y el tenant sale de la FILA REAL en users.tenant_id (un token
@@ -57,6 +75,8 @@ import json
 import os
 import re
 import sys
+import types
+import unicodedata
 import uuid
 from typing import Any, Optional
 
@@ -323,6 +343,58 @@ def _col_de(campo: str, cols: set) -> Optional[str]:
     return None
 
 
+_ESQUEMAS: dict = {}
+
+
+def _esquema(db, tabla: str) -> dict:
+    """FIX E-14y2: nombre de columna → info REAL (nullable / default /
+    primary_key / type). Con esto el INSERT se adapta a TU tabla aunque
+    exija columnas que el add-on no conocía (tu `code` NOT NULL)."""
+    clave = (DB_URL, tabla)
+    if clave not in _ESQUEMAS:
+        try:
+            _ESQUEMAS[clave] = {c["name"]: c for c in sa_inspect(_engine).get_columns(tabla)}
+        except Exception:
+            _ESQUEMAS[clave] = {}
+    return _ESQUEMAS[clave]
+
+
+def _slug(s: str) -> str:
+    """'Terraza 2' → 'TERRAZA-2' (sin tildes, sin espacios raros)."""
+    s = unicodedata.normalize("NFKD", str(s or "").strip().upper())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^A-Z0-9]+", "-", s).strip("-")
+    return s[:40] or "MESA"
+
+
+def _codigo_unico(db, tabla: str, tenant: Optional[str], nombre: str) -> str:
+    """FIX E-14y2: code único por dueño (tenant o demo NULL) derivado del
+    nombre. Si ya existe → sufijo -2, -3, ..."""
+    base = _slug(nombre)
+    usados: set = set()
+    try:
+        if tenant:
+            filas = db.execute(text(f"SELECT code FROM {tabla} WHERE tenant_id = :t"),
+                               {"t": tenant}).all()
+        else:
+            filas = db.execute(
+                text(f"SELECT code FROM {tabla} WHERE tenant_id IS NULL")).all()
+        for r in filas:
+            if r and r[0] is not None:
+                usados.add(str(r[0]).strip().upper())
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    if base.upper() not in usados:
+        return base
+    n = 2
+    while f"{base}-{n}".upper() in usados:
+        n += 1
+    return f"{base}-{n}"
+
+
 # ── TABLA DE MESAS: tu `tables` si existe; si no, una propia karei_mesas ──
 def _tabla_mesas() -> str:
     if _CACHÉ.get("tabla_mesas"):
@@ -393,27 +465,57 @@ def _asegurar_columnas(db) -> dict:
 # ── ENUMS REALES (versión compacta del FIX E-14i de pos_compat) ──────────
 # Nunca escribir un valor fuera del enum de tables.status: en SQLite el
 # CHECK del CREATE TABLE envenena la fila y las rutas viejas caen con 500.
+def _metadata_de(obj):
+    """MetaData de SQLAlchemy alcanzable desde un objeto (módulo, Base o
+    clase de modelo declarativa)."""
+    if obj is None:
+        return None
+    md = getattr(obj, "metadata", None)
+    if md is not None and hasattr(md, "tables"):
+        return md
+    t = getattr(obj, "__table__", None)  # clase de modelo declarativo
+    md = getattr(t, "metadata", None)
+    if md is not None and hasattr(md, "tables"):
+        return md
+    return None
+
+
 def _escanear_metadata():
+    """FIX E-14y2: busca los enums del ORM en CUALQUIER MetaData alcanzable
+    (módulos app/*, Bases declarativas y clases de modelo con __table__).
+    Antes solo miraba module.metadata y se perdía los modelos declarados
+    con Base → no hallaba TableStatus → escribía status='LIBRE' envenenando
+    la fila (la lección E-14i otra vez: 500 al LEER)."""
     if _META_ENUM:
         return
-    try:
-        from sqlalchemy import MetaData  # noqa
-        for _mname, _mod in list(sys.modules.items()):
-            if not _mname.startswith(("app", "models", "apps")):
-                continue
-            md = getattr(_mod, "metadata", None) or getattr(_mod, "MetaData", None)
-            if md is None or not hasattr(md, "tables"):
-                continue
-            try:
-                for _tname, _tabla in md.tables.items():
-                    for _col in _tabla.columns:
-                        if hasattr(_col.type, "enums"):
-                            _META_ENUM[(str(_tname).lower(), str(_col.name).lower())] = \
-                                list(_col.type.enums)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    vistos: set = set()
+
+    def registrar(md):
+        if md is None or id(md) in vistos or not hasattr(md, "tables"):
+            return
+        vistos.add(id(md))
+        try:
+            for _tname, _tabla in md.tables.items():
+                for _col in _tabla.columns:
+                    if hasattr(_col.type, "enums"):
+                        _META_ENUM[(str(_tname).lower(), str(_col.name).lower())] = \
+                            list(_col.type.enums)
+        except Exception:
+            pass
+
+    for _mname, _mod in list(sys.modules.items()):
+        if not isinstance(_mod, types.ModuleType):
+            continue
+        if not _mname.split(".")[0].startswith(
+                ("app", "apps", "models", "karei", "backend", "api", "main")):
+            continue
+        registrar(_metadata_de(_mod))
+        try:
+            candidatos = list(vars(_mod).values())[:500]
+        except Exception:
+            candidatos = []
+        for obj in candidatos:
+            registrar(_metadata_de(obj))
 
 
 def _valores_enum(db, tabla: str, columna: str) -> list:
@@ -455,9 +557,32 @@ def _valor_enum(db, tabla: str, columna: str, preferidos: list, obligatorio: boo
 # ─────────────────────────────────────────────────────────────────────────
 # 5. DOMINIO: sesión abierta, historial de ventas, dict de mesa
 # ─────────────────────────────────────────────────────────────────────────
+_TABLAS_EXISTENTES: set = set()
+
+
+def _tabla_existe(db, nombre: str) -> bool:
+    """¿Existe esta tabla en la BD? FIX E-14y2: consultar ANTES de lanzar
+    el SELECT evita el rollback() defensivo a mitad del bucle de limpiar,
+    que DESHACÍA los DELETEs ya hechos de iteraciones anteriores (bug
+    latente que el test E-14y2 destapó: una mesa sobrevivía a la limpieza)."""
+    if nombre in _TABLAS_EXISTENTES:
+        return True
+    try:
+        f = db.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+            {"t": nombre}).first()
+    except Exception:
+        return False
+    if f:
+        _TABLAS_EXISTENTES.add(nombre)  # solo cacheamos los POSITIVOS
+    return bool(f)
+
+
 def _sesion_abierta(db, table_id: str):
     """Mesa OCUPADA = tiene una sesión abierta en table_sessions
     (misma definición que usan pos_compat y pos_cuenta_live)."""
+    if not _tabla_existe(db, "table_sessions"):
+        return None
     try:
         return db.execute(text("SELECT * FROM table_sessions WHERE table_id IN (:a, :b) "
                                "AND status IN ('OPEN','ABIERTA','ABIERTO') "
@@ -473,10 +598,14 @@ def _sesion_abierta(db, table_id: str):
 
 def _ventas_de_mesa(db, table_id: str) -> int:
     """Historial de ventas de una mesa: pedidos (orders) + pagos hechos
-    (karei_payments). Si la tabla no existe, cuenta 0 sin reclamar."""
+    (karei_payments). Si la tabla no existe, cuenta 0 sin reclamar.
+    FIX E-14y2: si la tabla no existe NO se consulta → NO hay rollback()
+    que revienta los DELETEs pendientes del bucle de limpiar."""
     n = 0
     a, b = str(table_id), _norm_id(table_id)
     for tabla in ("orders", "karei_payments"):
+        if not _tabla_existe(db, tabla):
+            continue
         try:
             n += int(db.execute(
                 text(f"SELECT COUNT(*) FROM {tabla} WHERE table_id IN (:a, :b)"),
@@ -503,7 +632,7 @@ def _mesa_dict(fila: dict, ocupada: bool, mapa: dict) -> dict:
     forma = "redonda" if cap <= 4 else "rectangular"
     return {
         "id": mid, "table_id": mid, "mesa_id": mid,
-        "code": mid[:8],
+        "code": str(fila.get("code") or mid[:8]),  # E-14y2: el code REAL de la BD
         "name": nombre, "nombre": nombre, "label": nombre, "title": nombre,
         "capacity": cap, "capacidad": cap, "seats": cap, "personas": cap,
         "area": area, "area_name": area, "area_nombre": area, "zona": area, "zone": area,
@@ -612,8 +741,9 @@ def limpiar_mesas_sin_ventas(request: Request, db=Depends(_db)):
         if ventas > 0:
             conservadas.append({"nombre": nombre, "area": area, "ventas": ventas})
             continue
-        db.execute(text("DELETE FROM table_sessions WHERE table_id IN (:a, :b)"),
-                   {"a": mid, "b": _norm_id(mid)})
+        if _tabla_existe(db, "table_sessions"):
+            db.execute(text("DELETE FROM table_sessions WHERE table_id IN (:a, :b)"),
+                       {"a": mid, "b": _norm_id(mid)})
         db.execute(text(f"DELETE FROM {tabla} WHERE id = :i"), {"i": mid})
         eliminadas.append({"nombre": nombre, "area": area})
     db.commit()
@@ -638,6 +768,8 @@ def crear_mesa(request: Request, payload: Any = Body(None), db=Depends(_db)):
              "solo visible en el demo")
     tabla = _tabla_mesas()
     mapa = _asegurar_columnas(db)
+    esq = _esquema(db, tabla)   # FIX E-14y2: esquema REAL de TU tabla
+    cols = set(esq)
 
     nombre = _txt(payload, ["nombre", "name", "label", "code", "title", "titulo"])
     if not nombre:
@@ -660,48 +792,122 @@ def crear_mesa(request: Request, payload: Any = Body(None), db=Depends(_db)):
 
     mid = _uid()
     ahora = _now()
-    columnas, valores = ["id", mapa["tenant"], mapa["name"]], [":i", ":t", ":n"]
-    params = {"i": mid, "t": tenant, "n": nombre}
-    col_cap = _col_de("capacity", _columnas(db, tabla))
+    columnas, valores = ["id"], [":i"]
+    params = {"i": mid}
+    if mapa.get("tenant"):
+        columnas.append(mapa["tenant"])
+        valores.append(":t")
+        params["t"] = tenant
+    columnas.append(mapa["name"])
+    valores.append(":n")
+    params["n"] = nombre
+    col_cap = _col_de("capacity", cols)
     if col_cap:
         columnas.append(col_cap)
         valores.append(":c")
         params["c"] = capacidad
-    col_area = _col_de("area", _columnas(db, tabla))
+    col_area = _col_de("area", cols)
     if col_area:
         columnas.append(col_area)
         valores.append(":a")
         params["a"] = area
+
+    # FIX E-14y2: status SIEMPRE dentro del enum real del ORM. Escribir
+    # 'LIBRE' en una BD cuyo enum es AVAILABLE/OCCUPIED/... envenena la
+    # fila y las rutas viejas caen 500 al LEERLA (lección E-14i).
     estado = _valor_enum(db, tabla, "status",
-                         ["LIBRE", "FREE", "AVAILABLE", "DISPONIBLE", "IDLE"],
+                         ["AVAILABLE", "LIBRE", "FREE", "DISPONIBLE", "IDLE"],
                          obligatorio=True)
-    col_status = _col_de("status", _columnas(db, tabla))
+    col_status = _col_de("status", cols)
     if col_status and estado is not None:
         columnas.append(col_status)
         valores.append(":s")
         params["s"] = estado
     branch_id = _branch_del_tenant(db, tenant)
-    col_branch = _col_de("branch_id", _columnas(db, tabla))
+    col_branch = _col_de("branch_id", cols)
     if col_branch and branch_id:
         columnas.append(col_branch)
         valores.append(":br")
         params["br"] = branch_id
+
+    # FIX E-14y2: is_active SIEMPRE = 1 si la columna existe — las rutas
+    # viejas filtran `is_active = 1` (dashboard incluido); sin esto la
+    # mesa nacía invisible allá (o NOT NULL explotaba).
+    if "is_active" in cols:
+        columnas.append("is_active")
+        valores.append(":ia")
+        params["ia"] = 1
+
     for col, marc, val in (("created_at", ":ca", ahora), ("updated_at", ":ua", ahora)):
-        if col in _columnas(db, tabla):
+        if col in cols:
             columnas.append(col)
             valores.append(marc)
             params[marc.lstrip(":")] = val
 
+    # ── BARRIDO NOT NULL (el fix del IntegrityError de hoy) ─────────────
+    # Toda columna NOT NULL, sin default y sin PK que el INSERT no esté
+    # llenando se llena automáticamente con un valor sensato.
+    ya = {str(c).lower() for c in columnas}
+    codigo = None
+    if "code" in cols and "code" not in ya:
+        codigo = _codigo_unico(db, tabla, tenant, nombre)
+        columnas.append("code")
+        valores.append(":cod")
+        params["cod"] = codigo
+        ya.add("code")
+    for c, info in esq.items():
+        lc = str(c).lower()
+        if lc in ya or info.get("primary_key"):
+            continue
+        if info.get("nullable", True) or info.get("default") is not None:
+            continue
+        tipo = str(info.get("type") or "").upper()
+        val = None
+        if lc == "status" and estado is not None:
+            val = estado
+        elif lc == "name":
+            val = nombre
+        elif lc == "code":
+            val = codigo or _codigo_unico(db, tabla, tenant, nombre)
+        elif lc == "qr_code":
+            val = f"karei://mesa/{mid}"
+        elif lc == "tenant_id" and mapa.get("tenant"):
+            val = tenant
+        elif lc == "branch_id" and branch_id:
+            val = branch_id
+        elif lc in ("created_at", "updated_at"):
+            val = ahora
+        if val is None:
+            val = 0 if any(t in tipo for t in
+                           ("INT", "REAL", "FLOA", "DOUB", "NUMER", "DECIM")) else ""
+        idx = len(columnas)
+        columnas.append(c)
+        valores.append(f":x{idx}")
+        params[f"x{idx}"] = val
+        ya.add(lc)
+        _log(f"columna obligatoria '{tabla}.{c}' sin default → la llené sola "
+             f"con {val!r} (FIX E-14y2)")
+
     sql = f"INSERT INTO {tabla} ({', '.join(columnas)}) VALUES ({', '.join(valores)})"
-    db.execute(text(sql), params)
-    db.commit()
+    try:
+        db.execute(text(sql), params)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        m = re.search(r"NOT NULL constraint failed: \w+\.(\w+)", str(e))
+        extra = f" (columna «{m.group(1)}»)" if m else ""
+        _log("INSERT falló:", e)
+        raise HTTPException(500, f"La base rechazó la creación de la mesa{extra}. "
+                                 f"Mándame la terminal y lo clavamos. "
+                                 f"Detalle: {str(e)[:120]}")
     _log("mesa creada:", nombre, "· área", area, "·", capacidad, "pax · tenant",
-         (tenant or "")[:8])
+         (tenant or "")[:8], "· code", (codigo or "-"), "· status", (estado or "-"))
     return {"ok": True,
-            "mesa": {"id": mid, "name": nombre, "nombre": nombre, "label": nombre,
-                     "capacity": capacidad, "capacidad": capacidad, "seats": capacidad,
-                     "area": area, "area_name": area, "area_nombre": area, "zona": area,
-                     "estado": "Libre", "ocupada": False, "status": estado}}
+            "mesa": {"id": mid, "code": codigo, "name": nombre, "nombre": nombre,
+                     "label": nombre, "capacity": capacidad, "capacidad": capacidad,
+                     "seats": capacidad, "area": area, "area_name": area,
+                     "area_nombre": area, "zona": area, "estado": "Libre",
+                     "ocupada": False, "status": estado}}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -736,8 +942,9 @@ def eliminar_mesa(mesa_id: str, request: Request, db=Depends(_db)):
         raise HTTPException(409, f"«{nombre}» tiene historial de ventas ({ventas} "
                                  f"movimiento(s)); no se puede eliminar. Solo se "
                                  f"eliminan mesas sin ventas.")
-    db.execute(text("DELETE FROM table_sessions WHERE table_id IN (:a, :b)"),
-               {"a": str(fila.get("id")), "b": _norm_id(fila.get("id"))})
+    if _tabla_existe(db, "table_sessions"):
+        db.execute(text("DELETE FROM table_sessions WHERE table_id IN (:a, :b)"),
+                   {"a": str(fila.get("id")), "b": _norm_id(fila.get("id"))})
     db.execute(text(f"DELETE FROM {tabla} WHERE id = :i"), {"i": str(fila.get("id"))})
     db.commit()
     _log("mesa eliminada:", nombre, "(sin ventas)")
@@ -747,7 +954,8 @@ def eliminar_mesa(mesa_id: str, request: Request, db=Depends(_db)):
 # ─────────────────────────────────────────────────────────────────────────
 # 9. BANNER DE ARRANQUE
 # ─────────────────────────────────────────────────────────────────────────
-_log("E-14y listo → GET /pos/mapa · POST /pos/mesas · POST /pos/mesas/limpiar · "
-     "DELETE /pos/mesas/{id}  (cada una + /api/v1) · 401 SOLO si el token no identifica a nadie")
-_log("E-14y DB:", DB_URL, "(la tabla de mesas se resuelve en el primer request, "
+_log("E-14y2 listo → GET /pos/mapa · POST /pos/mesas · POST /pos/mesas/limpiar · "
+     "DELETE /pos/mesas/{id}  (cada una + /api/v1) · INSERT blindado al esquema "
+     "real (code único + is_active + NOT NULL auto) · status SIEMPRE en el enum")
+_log("E-14y2 DB:", DB_URL, "(la tabla de mesas se resuelve en el primer request, "
      "cuando TU tabla `tables` ya existe)")
