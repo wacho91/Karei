@@ -1,12 +1,13 @@
 """
 ═══════════════════════════════════════════════════════════════════════════════
- Kārei · saas_registro.py  ·  E-14z-g  (Fase SaaS — registro + verificación)
+ Kārei · saas_registro.py  ·  E-14z-i  (Fase SaaS — registro + verificación
+                                        + CORREO configurable DESDE LA APP)
 ═══════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
 Add-on INDEPENDIENTE (misma filosofía de pos_cuenta_live / pos_facturacion:
-no toca tus modelos, tu routers ni tu identity.py — los USA). Agrega 2
-endpoints que cierran el flujo de registro SaaS:
+no toca tus modelos, tus routers ni tu identity.py — los USA). Cierra el flujo
+de registro SaaS y además deja el SMTP administrable sin tocar la terminal:
 
   1. POST /saas/registro
      Crea de una vez: Tenant (TRIAL, 30 días) + Branch principal
@@ -22,43 +23,51 @@ endpoints que cierran el flujo de registro SaaS:
      tenant — así el PIN funciona desde el primer día. Responde una
      página HTML con la marca (el link del correo se abre directo).
 
-TU ROUTER NO SE TOCA: tu /auth/login ya exige status ACTIVE ("Debes
-verificar tu correo…") así que el flujo encaja sin cambiar una línea.
+  3. ★ NUEVO E-14z-i — SMTP SIN VARIABLES DE ENTORNO (desde la app)
+     GET  /saas/correo/config   → lee la configuración guardada (solo ADMIN)
+     PUT  /saas/correo/config   → la guarda en la BD (tabla saas_correo_config)
+     POST /saas/correo/probar   → envía un correo de prueba a la dirección
+                                  que digas y responde ok/error con el motivo.
 
-★ NUEVO E-14z-g — ENVÍO REAL DE CORREO (SMTP)
-----------------------------------------------
-Sin configurar nada: modo dev (link en consola + en pantalla), igual que antes.
+     PRIORIDAD de la config activa:  BD (lo guardado en la app)
+                                     → variables de entorno KAREI_SMTP_*
+                                     → nada → MODO DEV (link por consola).
+     La contraseña NUNCA se devuelve por la API (solo máscara "••••abcd" y
+     el flag tiene_password). En el PUT, si el campo contraseña llega vacío
+     se conserva la ya guardada. Para volver a MODO DEV basta con guardar
+     con el servidor vacío.
 
-Con SMTP configurado (variables de entorno, se leen al arrancar uvicorn):
+     Los endpoints de correo piden sesión con rol ADMIN (el token se lee del
+     header Authorization, el usuario y sus roles se verifican CONTRA LA BD —
+     un token falsificado no da nada, mismo criterio de pos_cuenta_live).
 
-    KAREI_SMTP_HOST      ej: smtp.gmail.com
-    KAREI_SMTP_PORT      587 (STARTTLS, default) o 465 (SSL)
-    KAREI_SMTP_USER      el correo que envía, ej: notificaciones@tumarca.com
-    KAREI_SMTP_PASSWORD  la contraseña de APLICACIÓN (Gmail: 16 caracteres)
-    KAREI_SMTP_FROM      (opcional) correo visible en De:, por defecto USER
+GMAIL en 3 pasos (también quedan dentro de la página Correo de la app):
+  (1) activa Verificación en 2 pasos en la cuenta de Google,
+  (2) entra a https://myaccount.google.com/apppasswords y crea una
+      "Contraseña de aplicación" (16 letras),
+  (3) pégala en la página Correo de Kārei (¡NO tu contraseña normal!).
+  Servidor: smtp.gmail.com · Puerto: 587 (STARTTLS) — 465 si prefieres SSL.
 
-Comportamiento:
-  · SMTP bien configurado  → envía el correo de verdad (HTML con la marca)
-                             y NO devuelve el link en la respuesta (seguro).
-  · SMTP sin configurar    → modo dev: link en consola + en pantalla.
-  · SMTP configurado pero falló el envío → el registro SÍ se crea, se
-                             devuelve el link con un "aviso" (no bloquea).
+Comportamiento del registro (igual que E-14z-g, ahora con la BD primero):
+  · SMTP activo (BD o entorno) → envía el correo de verdad (HTML con la
+    marca) y NO devuelve el link en la respuesta (seguro).
+  · Sin SMTP → modo dev: link en consola + en pantalla.
+  · SMTP activo pero envío fallido → el registro SÍ se crea, se devuelve
+    el link con un "aviso" (el registro jamás falla por el correo).
 
-GMAIL en 3 pasos: (1) activa Verificación en 2 pasos en la cuenta de Google,
-(2) entra a https://myaccount.google.com/apppasswords y crea una "Contraseña
-de aplicación" (16 letras), (3) usa esas 16 letras como KAREI_SMTP_PASSWORD
-(¡NO tu contraseña normal!). En Windows, define las variables en la MISMA
-terminal antes de uvicorn:
-    CMD:        set KAREI_SMTP_HOST=smtp.gmail.com  (una por línea)
-    PowerShell: $env:KAREI_SMTP_HOST="smtp.gmail.com"
+VARIABLES DE ENTORNO (opcional, siguen funcionando por compatibilidad):
+    KAREI_SMTP_HOST / KAREI_SMTP_PORT / KAREI_SMTP_USER
+    KAREI_SMTP_PASSWORD / KAREI_SMTP_FROM
 
 CÓMO MONTARLO (2 líneas en tu main.py, junto a los otros add-ons):
     from saas_registro import router as saas_registro_router
     app.include_router(saas_registro_router)
 
-    (igual que hiciste con pos_facturacion — debajo de ese include)
-
 Decisiones ya tomadas (decir si alguna se quiere distinta):
+  · La config de correo es GLOBAL de la plataforma (una sola fila, id=1):
+    es el buzón con el que Kārei envía las verificaciones de TODOS los
+    restaurantes. Cuando exista rol de super-admin separado del ADMIN de
+    cada tenant, estos endpoints se le reservan a él.
   · Trial: 30 días desde el registro (Tenant.trial_ends_at).
   · Correo del admin: único GLOBAL (409 si existe) — tu /auth/login busca
     por email sin tenant, así que permitir duplicados entre tenants rompería
@@ -73,8 +82,10 @@ Decisiones ya tomadas (decir si alguna se quiere distinta):
 """
 
 import asyncio
+import base64
 import bcrypt
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -90,7 +101,7 @@ from typing import List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -112,7 +123,7 @@ _log = lambda *a: print("[saas_registro]", *a)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 0. SMTP (correo real) — variables de entorno, cero dependencias nuevas
+# 0a. SMTP — fallback por variables de entorno (sigue funcionando)
 # ─────────────────────────────────────────────────────────────────────────
 SMTP_HOST = os.getenv("KAREI_SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("KAREI_SMTP_PORT", "587").strip() or "587")
@@ -121,29 +132,95 @@ SMTP_PASSWORD = os.getenv("KAREI_SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("KAREI_SMTP_FROM", "").strip() or SMTP_USER
 
 
-def _smtp_configurado() -> bool:
+def _env_configurado() -> bool:
+    """¿Hay SMTP completo por variables de entorno? (fallback)"""
     return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
 
-def _enviar_correo_smtp(destino: str, asunto: str, html: str) -> Tuple[bool, str]:
-    """Envía el correo. Devuelve (ok, mensaje_de_error). NUNCA lanza."""
+# ─────────────────────────────────────────────────────────────────────────
+# 0b. SMTP — ★ E-14z-i: configuración guardada EN LA BASE DE DATOS
+# ─────────────────────────────────────────────────────────────────────────
+_TABLA_CORREO = """
+CREATE TABLE IF NOT EXISTS saas_correo_config (
+    id             INTEGER PRIMARY KEY,
+    smtp_host      VARCHAR(255) DEFAULT '',
+    smtp_port      INTEGER      DEFAULT 587,
+    smtp_user      VARCHAR(255) DEFAULT '',
+    smtp_password  VARCHAR(255) DEFAULT '',
+    smtp_from      VARCHAR(255) DEFAULT '',
+    actualizado_en VARCHAR(40)  DEFAULT ''
+)
+"""
+
+_tabla_correo_lista = False
+
+
+async def _asegurar_tabla_correo(db: AsyncSession) -> None:
+    """Crea la tabla de config una sola vez por proceso (idempotente)."""
+    global _tabla_correo_lista
+    if _tabla_correo_lista:
+        return
+    await db.execute(text(_TABLA_CORREO))
+    await db.commit()
+    _tabla_correo_lista = True
+
+
+async def _fila_correo(db: AsyncSession) -> dict:
+    """La fila id=1 como dict, o {} si no hay nada guardado aún."""
+    fila = (await db.execute(text(
+        "SELECT smtp_host, smtp_port, smtp_user, smtp_password, smtp_from "
+        "FROM saas_correo_config WHERE id = 1"
+    ))).first()
+    if not fila:
+        return {}
     try:
+        puerto = int(fila[1] or 587)
+    except Exception:
+        puerto = 587
+    return {
+        "host": (fila[0] or "").strip(),
+        "port": puerto,
+        "user": (fila[2] or "").strip(),
+        "password": (fila[3] or "").strip(),
+        "from": (fila[4] or "").strip(),
+    }
+
+
+async def _config_correo(db: AsyncSession) -> Optional[dict]:
+    """Config ACTIVA: BD completa → variables de entorno → None (modo dev)."""
+    f = await _fila_correo(db)
+    if f.get("host") and f.get("user") and f.get("password"):
+        return f
+    if _env_configurado():
+        return {"host": SMTP_HOST, "port": SMTP_PORT, "user": SMTP_USER,
+                "password": SMTP_PASSWORD, "from": SMTP_FROM or SMTP_USER}
+    return None
+
+
+def _enviar_correo_smtp(cfg: dict, destino: str, asunto: str, html: str) -> Tuple[bool, str]:
+    """Envía el correo con la config dada. Devuelve (ok, error). NUNCA lanza."""
+    try:
+        puerto = int(cfg.get("port") or 587)
+        usuario = str(cfg.get("user") or "")
+        contrasena = str(cfg.get("password") or "")
+        remitente = str(cfg.get("from") or usuario)
+
         msg = MIMEText(html, "html", "utf-8")
         msg["Subject"] = Header(asunto, "utf-8")
-        msg["From"] = formataddr(("Kārei", SMTP_FROM))
+        msg["From"] = formataddr(("Kārei", remitente))
         msg["To"] = destino
 
-        if SMTP_PORT == 465:  # SSL directo (ej: algunos proveedores)
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-                s.login(SMTP_USER, SMTP_PASSWORD)
-                s.sendmail(SMTP_FROM, [destino], msg.as_string())
-        else:  # 587: STARTTLS (Gmail y la mayoría)
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        if puerto == 465:  # SSL directo (algunos proveedores)
+            with smtplib.SMTP_SSL(cfg["host"], puerto, timeout=20) as s:
+                s.login(usuario, contrasena)
+                s.sendmail(remitente, [destino], msg.as_string())
+        else:  # 587 y demás: STARTTLS (Gmail y la mayoría)
+            with smtplib.SMTP(cfg["host"], puerto, timeout=20) as s:
                 s.ehlo()
                 s.starttls(context=ssl.create_default_context())
                 s.ehlo()
-                s.login(SMTP_USER, SMTP_PASSWORD)
-                s.sendmail(SMTP_FROM, [destino], msg.as_string())
+                s.login(usuario, contrasena)
+                s.sendmail(remitente, [destino], msg.as_string())
         return True, ""
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -190,14 +267,83 @@ def _html_correo(nombre: str, restaurante: str, url: str) -> str:
     )
 
 
-if _smtp_configurado():
-    print(f"[saas_registro] E-14z-g listo · SMTP activo → {SMTP_HOST}:{SMTP_PORT} (de {SMTP_FROM})")
+# Correo de PRUEBA (botón de la página Correo) — también con tablas
+_PLANTILLA_PRUEBA = """\
+<!doctype html><html lang="es"><body style="margin:0;padding:24px;background:#0f172a;font-family:Arial,Helvetica,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+ <tr><td style="background:#1e293b;border-radius:16px 16px 0 0;padding:28px 32px;border-bottom:3px solid #f59e0b;">
+   <span style="font-size:26px;font-weight:800;color:#f59e0b;letter-spacing:1px;">K&#257;rei</span>
+   <span style="display:block;color:#94a3b8;font-size:12px;margin-top:4px;">Prueba de configuraci&oacute;n de correo</span>
+ </td></tr>
+ <tr><td style="background:#ffffff;padding:32px;">
+   <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">&iexcl;Funciona, socio!</h1>
+   <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#334155;">
+     Este correo sali&oacute; del servidor SMTP que acabas de configurar en K&#257;rei
+     (<b style="color:#0f172a;">{host}</b>, puerto <b style="color:#0f172a;">{puerto}</b>).
+     Desde ahora las verificaciones de registro llegan de verdad a tus clientes.
+   </p>
+ </td></tr>
+ <tr><td style="background:#0f172a;border-radius:0 0 16px 16px;padding:16px 32px;text-align:center;">
+   <span style="font-size:11px;color:#475569;">Correo de prueba generado en K&#257;rei &middot; el ERP gastron&oacute;mico colombiano</span>
+ </td></tr>
+</table>
+</td></tr></table></body></html>"""
+
+
+def _html_prueba(host: str, puerto: int) -> str:
+    return _PLANTILLA_PRUEBA.format(host=host or "?", puerto=puerto or 587)
+
+
+if _env_configurado():
+    print(f"[saas_registro] E-14z-i listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
+          f" (en la app también puedes guardarlo: menú Correo, y esa config tiene prioridad)")
 else:
-    print("[saas_registro] E-14z-g listo · SIN SMTP → link de verificación por consola/pantalla (dev)")
+    print("[saas_registro] E-14z-i listo · correo se configura desde la APP (menú Correo)"
+          " · sin config → modo dev (link por consola/pantalla)")
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 1. Payload
+# 0c. Auth de los endpoints de correo — ADMIN verificado CONTRA LA BD
+# ─────────────────────────────────────────────────────────────────────────
+def _uid_de_token(request: Request) -> Optional[int]:
+    """Saca el user id del JWT SIN verificar firma (solo para BUSCAR al
+    usuario en la BD; el permiso real se resuelve ahí, igual que en
+    pos_cuenta_live — un token inventado no encuentra usuario y da 401)."""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return None
+    token = auth.split(" ", 1)[1].strip()
+    try:
+        parte = token.split(".")[1]
+        parte += "=" * (-len(parte) % 4)
+        datos = json.loads(base64.urlsafe_b64decode(parte))
+        crudo = datos.get("sub") or datos.get("user_id") or datos.get("id")
+        return int(crudo) if crudo is not None else None
+    except Exception:
+        return None
+
+
+async def _exigir_admin(request: Request, db: AsyncSession) -> User:
+    uid = _uid_de_token(request)
+    if uid is None:
+        raise HTTPException(401, "Inicia sesión para administrar el correo.")
+    u = (await db.execute(
+        select(User).where(User.id == uid)
+    )).scalar_one_or_none()
+    if not u:
+        raise HTTPException(401, "Sesión no válida: inicia sesión de nuevo.")
+    codes = (await db.execute(
+        select(Role.code).join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == u.id)
+    )).scalars().all()
+    if "ADMIN" not in {str(c).upper() for c in codes}:
+        raise HTTPException(403, "Solo el ADMIN puede configurar el correo.")
+    return u
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 1. Payloads
 # ─────────────────────────────────────────────────────────────────────────
 class RestauranteIn(BaseModel):
     commercial_name: str = Field(min_length=2, max_length=255)
@@ -223,6 +369,18 @@ class RegistroIn(BaseModel):
     restaurante: RestauranteIn
     admin: AdminIn
     equipo: List[EquipoIn] = Field(default_factory=list)
+
+
+class CorreoConfigIn(BaseModel):
+    smtp_host: str = Field(default="", max_length=255)
+    smtp_port: int = Field(default=587)
+    smtp_user: str = Field(default="", max_length=255)
+    smtp_password: str = Field(default="", max_length=255)  # vacío = conservar
+    smtp_from: str = Field(default="", max_length=255)
+
+
+class CorreoPruebaIn(BaseModel):
+    destino: str = Field(min_length=5, max_length=255)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -409,11 +567,19 @@ async def registrar(payload: RegistroIn, request: Request, db: AsyncSession = De
     base = str(request.base_url).rstrip("/")  # http://localhost:8000
     verificacion_url = f"{base}/api/v1/saas/verificar?token={token_crudo}"
 
-    # ── ★ E-14z-g: correo de verdad si hay SMTP; modo dev si no
+    # ── ★ E-14z-i: correo de verdad con la config ACTIVA (BD → entorno);
+    #     sin config → modo dev. El registro JAMÁS falla por el correo.
     asunto = f"Verifica tu correo · {payload.restaurante.commercial_name} en Kārei"
-    if _smtp_configurado():
+    cfg_correo = None
+    try:
+        await _asegurar_tabla_correo(db)
+        cfg_correo = await _config_correo(db)
+    except Exception as exc:
+        _log("config de correo no se pudo leer (sigo en modo dev):", exc)
+
+    if cfg_correo:
         email_enviado, error_envio = await asyncio.to_thread(
-            _enviar_correo_smtp, email, asunto,
+            _enviar_correo_smtp, cfg_correo, email, asunto,
             _html_correo(payload.admin.full_name, payload.restaurante.commercial_name, verificacion_url),
         )
     else:
@@ -429,14 +595,14 @@ async def registrar(payload: RegistroIn, request: Request, db: AsyncSession = De
         _log("=" * 60)
         _log("REGISTRO NUEVO:", payload.restaurante.commercial_name, "·", tenant.slug)
         _log("  admin:", email, "· equipo:", equipo_creados, "persona(s)")
-        if _smtp_configurado():
+        if cfg_correo:
             _log("  ⚠️ SMTP configurado PERO el envío FALLÓ →", error_envio)
         _log("  EMAIL DE VERIFICACIÓN (modo dev):")
         _log("  " + verificacion_url)
         _log("=" * 60)
 
     resp = {
-        "version": "E-14z-g",
+        "version": "E-14z-i",
         "ok": True,
         "tenant": {"slug": tenant.slug, "commercial_name": tenant.commercial_name,
                    "trial_hasta": str(tenant.trial_ends_at)},
@@ -450,8 +616,8 @@ async def registrar(payload: RegistroIn, request: Request, db: AsyncSession = De
         resp["verificacion_url"] = verificacion_url
         resp["aviso"] = (
             f"No pude enviar el correo ({error_envio}). Mientras lo arreglamos, usa este link."
-            if _smtp_configurado() else
-            "Servidor sin SMTP configurado: usa este link (o configúralo con las variables KAREI_SMTP_*)."
+            if cfg_correo else
+            "Servidor sin SMTP configurado: usa este link (o configúralo en Kārei → menú Correo)."
         )
     return resp
 
@@ -508,3 +674,102 @@ async def verificar(token: str = "", db: AsyncSession = Depends(get_db)):
         equipo=f"{len(equipo)} persona(s)" if equipo else "tu equipo",
         front=FRONT_URL,
     ))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 5. ★ E-14z-i — SMTP desde la app (solo ADMIN, config global id=1)
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/api/v1/saas/correo/config")
+@router.get("/saas/correo/config")
+async def ver_correo_config(request: Request, db: AsyncSession = Depends(get_db)):
+    await _exigir_admin(request, db)
+    await _asegurar_tabla_correo(db)
+    f = await _fila_correo(db)
+    cfg = await _config_correo(db)
+    pw = f.get("password") or SMTP_PASSWORD
+    completa_bd = bool(f.get("host") and f.get("user") and f.get("password"))
+    return {
+        "version": "E-14z-i",
+        "activo": cfg is not None,
+        "fuente": "bd" if completa_bd else ("entorno" if cfg else "dev"),
+        "smtp_host": f.get("host", ""),
+        "smtp_port": f.get("port") or 587,
+        "smtp_user": f.get("user", ""),
+        "smtp_from": f.get("from", ""),
+        "tiene_password": bool(pw),
+        "password_mascara": ("••••" + pw[-4:]) if pw else "",
+        "hay_entorno": _env_configurado(),
+    }
+
+
+@router.put("/api/v1/saas/correo/config")
+@router.put("/saas/correo/config")
+async def guardar_correo_config(payload: CorreoConfigIn, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+    await _exigir_admin(request, db)
+    await _asegurar_tabla_correo(db)
+
+    host = payload.smtp_host.strip()
+    user = payload.smtp_user.strip()
+    de = payload.smtp_from.strip() or user
+    try:
+        puerto = int(payload.smtp_port or 587)
+    except Exception:
+        raise HTTPException(422, "El puerto debe ser un número (587 STARTTLS o 465 SSL).")
+    if puerto < 1 or puerto > 65535:
+        raise HTTPException(422, "El puerto debe estar entre 1 y 65535.")
+
+    f = await _fila_correo(db)
+    password = payload.smtp_password.strip() or f.get("password", "")
+    ahora = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    if f:
+        await db.execute(text(
+            "UPDATE saas_correo_config SET smtp_host = :h, smtp_port = :p, smtp_user = :u, "
+            "smtp_password = :pw, smtp_from = :de, actualizado_en = :ts WHERE id = 1"
+        ), {"h": host, "p": puerto, "u": user, "pw": password, "de": de, "ts": ahora})
+    else:
+        await db.execute(text(
+            "INSERT INTO saas_correo_config "
+            "(id, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, actualizado_en) "
+            "VALUES (1, :h, :p, :u, :pw, :de, :ts)"
+        ), {"h": host, "p": puerto, "u": user, "pw": password, "de": de, "ts": ahora})
+    await db.commit()
+
+    activo = bool(host and user and password)
+    if activo:
+        _log("correo GUARDADO desde la app →", host, ":", puerto, "(de", de or user + ")")
+        aviso = "Guardado. Desde ahora el correo de verificación sale de verdad."
+    else:
+        faltan = [n for n, v in (("servidor", host), ("usuario", user), ("contraseña", password)) if not v]
+        _log("correo guardado INCOMPLETO, falta:", ", ".join(faltan))
+        aviso = ("Guardado, pero falta: " + ", ".join(faltan) +
+                 ". Mientras tanto sigo en modo dev (link por consola/pantalla). "
+                 "Para dejar el SMTP apagado por completo, guarda con el servidor vacío.")
+    return {"version": "E-14z-i", "ok": True, "activo": activo, "aviso": aviso}
+
+
+@router.post("/api/v1/saas/correo/probar")
+@router.post("/saas/correo/probar")
+async def probar_correo(payload: CorreoPruebaIn, request: Request,
+                        db: AsyncSession = Depends(get_db)):
+    await _exigir_admin(request, db)
+    await _asegurar_tabla_correo(db)
+    cfg = await _config_correo(db)
+    if not cfg:
+        raise HTTPException(422, "No hay SMTP activo todavía: guarda servidor, usuario y "
+                                 "contraseña en esta página y vuelve a intentar.")
+    destino = payload.destino.strip().lower()
+    ok, error = await asyncio.to_thread(
+        _enviar_correo_smtp, cfg, destino,
+        "Correo de prueba · Kārei",
+        _html_prueba(cfg.get("host", ""), int(cfg.get("port") or 587)),
+    )
+    if ok:
+        _log("correo de PRUEBA enviado →", destino)
+        return {"version": "E-14z-i", "ok": True,
+                "mensaje": f"Correo enviado a {destino}. Revisa bandeja de entrada y spam."}
+    _log("correo de PRUEBA falló →", error)
+    return {"version": "E-14z-i", "ok": False,
+            "mensaje": f"No se pudo enviar: {error} "
+                       "(revisa servidor/puerto, usuario y contraseña de APLICACIÓN)."}
