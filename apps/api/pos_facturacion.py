@@ -1,6 +1,14 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14v) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+Kārei · pos_facturacion.py (E-14w-b) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+═════════════════════════════════════════════════════════════════════════
+NUEVO EN E-14w-b (COMPATIBILIDAD POSTGRES — deploy en la nube):
+· karei_config ya no usa DATETIME (no existe en Postgres) ni
+  INSERT OR IGNORE (sintaxis SQLite) → TIMESTAMP + ON CONFLICT, que
+  sirven igual en SQLite y Postgres.
+· Los ORDER BY dejan de usar rowid (tampoco existe en Postgres).
+· Las respuestas dicen "version": "E-14w-b" para que verifiques en
+  Swagger qué archivo está vivo.
 ═════════════════════════════════════════════════════════════════════════════
 QUÉ ES
 ------
@@ -138,7 +146,16 @@ def _fecha_de(p: dict) -> Optional[datetime.datetime]:
     return None
 
 
-_log("E-14w activo — DB:", DB_URL)
+_log("E-14w-b activo — DB:", DB_URL)
+
+
+def _es_sqlite() -> bool:
+    """E-14w-b: ¿el motor es SQLite? rowid SOLO existe ahí; en Postgres
+    el orden queda por fecha (desempate cosmético)."""
+    try:
+        return str(_engine.dialect.name).lower() == "sqlite"
+    except Exception:
+        return True
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -216,11 +233,14 @@ def _asegurar_config() -> bool:
         with _engine.begin() as cx:
             cx.execute(text(
                 f"CREATE TABLE IF NOT EXISTS {_TABLA_CFG} ("
-                "clave VARCHAR(60) PRIMARY KEY, valor TEXT, updated_at DATETIME)"))
+                "clave VARCHAR(60) PRIMARY KEY, valor TEXT, updated_at TIMESTAMP)"))  # E-14w-b: TIMESTAMP (DATETIME no existe en PG)
             for k, v in _CONFIG_DEFECTO.items():
+                # E-14w-b: INSERT OR IGNORE es de SQLite → ON CONFLICT sirve
+                # igual en SQLite (3.24+) y en Postgres.
                 cx.execute(text(
-                    f"INSERT OR IGNORE INTO {_TABLA_CFG} (clave, valor, updated_at) "
-                    "VALUES (:k, :v, :u)"), {"k": k, "v": v, "u": _now()})
+                    f"INSERT INTO {_TABLA_CFG} (clave, valor, updated_at) "
+                    "VALUES (:k, :v, :u) "
+                    "ON CONFLICT(clave) DO NOTHING"), {"k": k, "v": v, "u": _now()})
         _CFG_LISTA["hecho"] = True
         _log("config del restaurante lista:", _TABLA_CFG)
         return True
@@ -308,7 +328,8 @@ def _backfill_tickets() -> int:
         with _engine.begin() as cx:
             filas = cx.execute(text(
                 f"SELECT id FROM {_TABLA_PAGOS} WHERE ticket_no IS NULL "
-                "ORDER BY COALESCE(paid_at, created_at), rowid")).all()
+                f"ORDER BY COALESCE(paid_at, created_at)"
+                + (", rowid" if _es_sqlite() else ""))).all()  # E-14w-b: sin rowid en PG
             if not filas:
                 return 0
             mx = cx.execute(text(
@@ -439,7 +460,7 @@ def _items_de_ordenes(db, order_ids: list) -> list:
 @router.get("/api/v1/pos/facturacion/config")
 @router.get("/api/v1/pos/config/restaurante")
 def ver_config():
-    return {"version": "E-14w", "config": _config_dict()}
+    return {"version": "E-14w-b", "config": _config_dict()}
 
 
 @router.put("/api/v1/pos/facturacion/config")
@@ -465,7 +486,7 @@ def guardar_config(payload: Optional[dict] = None):
         except Exception as e:
             _log("config: clave sin guardar", clave, ":", e)
     _log("config actualizada:", guardados)
-    return {"version": "E-14w", "ok": True, "guardados": guardados,
+    return {"version": "E-14w-b", "ok": True, "guardados": guardados,
             "config": _config_dict()}
 
 
@@ -482,11 +503,12 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
         with _engine.connect() as cx:
             filas = cx.execute(text(
                 f"SELECT * FROM {_TABLA_PAGOS} "
-                "ORDER BY COALESCE(paid_at, created_at) DESC, rowid DESC")).mappings().all()
+                "ORDER BY COALESCE(paid_at, created_at) DESC"
+                + (", rowid DESC" if _es_sqlite() else ""))).mappings().all()  # E-14w-b
             pagos = [dict(f) for f in filas]
     except Exception as e:
         _log("historial: no pude leer pagos:", e)
-        return {"version": "E-14w", "pagos": [], "n": 0, "total": 0,
+        return {"version": "E-14w-b", "pagos": [], "n": 0, "total": 0,
                 "currency": "COP"}
     # E-14w: fuera los pagos de otras empresas
     pagos = _filtrar_por_tenant(pagos, tenant)
@@ -504,7 +526,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
     off = max(0, int(offset or 0))
     total_all = round(sum(float(p.get("total") or 0) for p in pagos), 2)
     pagina = pagos[off:off + limit]
-    return {"version": "E-14w", "n": len(pagos), "total": total_all,
+    return {"version": "E-14w-b", "n": len(pagos), "total": total_all,
             "currency": "COP",
             "pagos": [{
                 "id": p.get("id"),
@@ -541,7 +563,8 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
         with _engine.connect() as cx:
             filas = cx.execute(text(
                 f"SELECT * FROM {_TABLA_PAGOS} "
-                "ORDER BY COALESCE(paid_at, created_at), rowid")).mappings().all()
+                "ORDER BY COALESCE(paid_at, created_at)"
+                + (", rowid" if _es_sqlite() else ""))).mappings().all()  # E-14w-b
             pagos = [dict(x) for x in filas]
     except Exception as e:
         _log("cierre: no pude leer pagos:", e)
@@ -574,7 +597,7 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                if p.get("ticket_no") is not None]
     horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
     cfg = _config_dict()
-    return {"version": "E-14w", "tipo": "CIERRE DE CAJA (Informe Z)",
+    return {"version": "E-14w-b", "tipo": "CIERRE DE CAJA (Informe Z)",
             "fecha": f.strftime("%Y-%m-%d"),
             "generado_en": _now(),
             "n_pagos": len(del_dia),
@@ -669,7 +692,7 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
         base, iva, total = subtotal, 0.0, round(subtotal + propina, 2)
 
     fp = _fecha_de(pago)
-    return {"version": "E-14w", "currency": "COP",
+    return {"version": "E-14w-b", "currency": "COP",
             "config": cfg,
             "pago": {"id": pago.get("id"),
                      "tirilla_no": _tirilla_no(pago.get("ticket_no")),

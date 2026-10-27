@@ -40,10 +40,10 @@ const NAV: ItemNav[] = [
     to: '/recetas', etiqueta: 'Recetas', roles: ['ADMIN'],
     d: 'M6 2h9l5 5v15H6V2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v-2H8v2Zm0 4h8v-2H8v2Z',
   },
-  {
-    to: '/correo', etiqueta: 'Correo', roles: ['ADMIN'],
-    d: 'M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 4.24-8 5-8-5V6l8 5 8-5v2.24Z',
-  },
+  // {
+  //   to: '/correo', etiqueta: 'Correo', roles: ['ADMIN'],
+  //   d: 'M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 4.24-8 5-8-5V6l8 5 8-5v2.24Z',
+  // },
 ];
 
 const COLOR_ROL: Record<string, string> = {
