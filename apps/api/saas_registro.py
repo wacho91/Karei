@@ -1,6 +1,6 @@
 """
 ═══════════════════════════════════════════════════════════════════════════════
- Kārei · saas_registro.py  ·  E-14z-i + FIX E-14y3b  (Fase SaaS — registro
+ Kārei · saas_registro.py  ·  E-14z-i + FIX E-14y3b + E-14y4  (Fase SaaS — registro
                     + verificación + CORREO configurable DESDE LA APP)
 ═══════════════════════════════════════════════════════════════════════════════
 QUÉ ES
@@ -66,8 +66,9 @@ CÓMO MONTARLO (2 líneas en tu main.py, junto a los otros add-ons):
 Decisiones ya tomadas (decir si alguna se quiere distinta):
   · La config de correo es GLOBAL de la plataforma (una sola fila, id=1):
     es el buzón con el que Kārei envía las verificaciones de TODOS los
-    restaurantes. Cuando exista rol de super-admin separado del ADMIN de
-    cada tenant, estos endpoints se le reservan a él.
+    restaurantes. ★ E-14y4: en producción queda bajo LLAVE MAESTRA
+    (KAREI_CORREO_MASTER + header X-Karei-Master) — solo el equipo de la
+    plataforma la toca, detrás de cámaras; el formulario se oculta del menú.
   · Trial: 30 días desde el registro (Tenant.trial_ends_at).
   · Correo del admin: único GLOBAL (409 si existe) — tu /auth/login busca
     por email sin tenant, así que permitir duplicados entre tenants rompería
@@ -131,6 +132,16 @@ SMTP_PORT = int(os.getenv("KAREI_SMTP_PORT", "587").strip() or "587")
 SMTP_USER = os.getenv("KAREI_SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("KAREI_SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("KAREI_SMTP_FROM", "").strip() or SMTP_USER
+
+# ★ E-14y4 — Llave maestra de la PLATAFORMA (config "detrás de cámaras"):
+#    En el servidor de producción se define KAREI_CORREO_MASTER=<llave-larga>.
+#    Definida → leer/guardar/probar el correo exige, además del rol ADMIN,
+#    el header "X-Karei-Master" con esa llave: los ADMIN de los restaurantes
+#    QUEDAN FUERA (403) y el buzón global de Kārei solo lo maneja nuestro
+#    equipo (vía Swagger/curl, sin formulario visible).
+#    Sin la variable (dev local) → todo funciona como siempre, sin llave.
+MASTER_CORREO = os.getenv("KAREI_CORREO_MASTER", "").strip()
+HEADER_MASTER = "x-karei-master"
 
 
 def _env_configurado() -> bool:
@@ -296,11 +307,14 @@ def _html_prueba(host: str, puerto: int) -> str:
     return _PLANTILLA_PRUEBA.format(host=host or "?", puerto=puerto or 587)
 
 
-if _env_configurado():
-    print(f"[saas_registro] E-14y3b listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
+if MASTER_CORREO:
+    print(f"[saas_registro] E-14y4 listo · MODO PLATAFORMA: correo bajo llave maestra "
+          f"(header '{HEADER_MASTER}') — los tenants NO pueden tocar la config")
+elif _env_configurado():
+    print(f"[saas_registro] E-14y4 listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
           f" (en la app también puedes guardarlo: menú Correo, y esa config tiene prioridad)")
 else:
-    print("[saas_registro] E-14y3b listo · correo se configura desde la APP (menú Correo)"
+    print("[saas_registro] E-14y4 listo · correo se configura desde la APP (menú Correo)"
           " · sin config → modo dev (link por consola/pantalla)")
 
 
@@ -387,6 +401,14 @@ def _emails_de(payload: dict) -> list:
 
 
 async def _exigir_admin(request: Request, db: AsyncSession) -> User:
+    # 0) Candado de plataforma (E-14y4): con KAREI_CORREO_MASTER definida, si
+    #    el header no trae la llave correcta es un 403 SECO sin siquiera leer
+    #    el token — ni rastro de la config para quien no sea la plataforma.
+    if MASTER_CORREO:
+        dada = str(getattr(request, "headers", {}).get(HEADER_MASTER) or "").strip()
+        if not dada or not secrets.compare_digest(dada, MASTER_CORREO):
+            raise HTTPException(403, "Configuración interna de la plataforma.")
+
     payload = _payload_bearer(request)
     u: Optional[User] = None
 
