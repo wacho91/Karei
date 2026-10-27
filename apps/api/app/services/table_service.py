@@ -1,4 +1,10 @@
-"""Servicio del POS: contexto demo, mesas y sesiones."""
+"""Servicio del POS: contexto demo, mesas y sesiones.
+
+AUDIT-100 (multi-tenant): sesion_abierta acepta tenant_id OPCIONAL y,
+cuando llega, la sesión debe ser DEL TENANT. Las llamadas internas
+(delete_table, abrir_mesa) ya lo pasan. La firma vieja sigue funcionando
+para cualquier otra llamada existente (parámetro opcional).
+"""
 import uuid
 from uuid import UUID
 
@@ -59,12 +65,20 @@ def _mesa_dict(mesa: Table, sesion: TableSession | None = None, order: Order | N
     }
 
 
-async def sesion_abierta(db: AsyncSession, table_id: UUID) -> TableSession | None:
+async def sesion_abierta(
+    db: AsyncSession, table_id: UUID, tenant_id: UUID | None = None,
+) -> TableSession | None:
+    """Sesión OPEN de una mesa. AUDIT-100: si llega tenant_id, la sesión
+    además debe ser DEL TENANT (defensa en profundidad: nadie cruza sesiones
+    entre restaurantes aunque el table_id venga manipulado)."""
+    condiciones = [
+        TableSession.table_id == table_id,
+        TableSession.status == TableSessionStatus.OPEN,
+    ]
+    if tenant_id is not None:
+        condiciones.append(TableSession.tenant_id == tenant_id)
     result = await db.execute(
-        select(TableSession).where(
-            TableSession.table_id == table_id,
-            TableSession.status == TableSessionStatus.OPEN,
-        )
+        select(TableSession).where(*condiciones)
     )
     return result.scalar_one_or_none()
 
@@ -167,7 +181,7 @@ async def delete_table(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> dic
     """Elimina una mesa. REGLA DE ERP: si tiene historial (sesiones o pedidos),
     nunca se borra — se desactiva (soft delete) para preservar las ventas."""
     mesa = await _obtener_mesa(db, tenant_id, table_id)
-    if await sesion_abierta(db, table_id):
+    if await sesion_abierta(db, table_id, tenant_id):  # AUDIT-100: con tenant
         raise HTTPException(409, "La mesa tiene una cuenta abierta. Cóbrela primero.")
 
     tiene_sesiones = (await db.execute(
@@ -194,7 +208,7 @@ async def abrir_mesa(db: AsyncSession, tenant_id: UUID, table_id: UUID, user_id:
     """Abre una mesa (llegan clientes). Idempotente: si ya está abierta,
     devuelve su estado sin error (un doble clic no debe romper nada)."""
     mesa = await _obtener_mesa(db, tenant_id, table_id)
-    sesion = await sesion_abierta(db, table_id)
+    sesion = await sesion_abierta(db, table_id, tenant_id)  # AUDIT-100: con tenant
     if sesion is None:
         sesion = TableSession(
             tenant_id=tenant_id, table_id=table_id,
