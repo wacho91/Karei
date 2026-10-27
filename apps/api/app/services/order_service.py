@@ -1,10 +1,16 @@
-"""Servicio de pedidos: comanda, envío a cocina (descuenta inventario) y cierre."""
+"""Servicio de pedidos: comanda, envío a cocina (descuenta inventario) y cierre.
+
+AUDIT-100 (multi-tenant): blindajes de defensa en profundidad añadidos —
+sesion_abierta con tenant, nombres de recetas/mesas filtrados por tenant,
+404 limpio en add_items (antes .scalar_one() daba 500) y conteo con
+func.count() para el consecutivo (antes cargaba todos los ids).
+"""
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,7 +34,7 @@ async def get_active_order(db: AsyncSession, tenant_id: UUID, table_id: UUID) ->
 
 
 async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, user_id: UUID, datos) -> dict:
-    sesion = await sesion_abierta(db, table_id)
+    sesion = await sesion_abierta(db, table_id, tenant_id)  # AUDIT-100: con tenant
     if not sesion:
         raise HTTPException(409, "La mesa no está abierta. Ábrela antes de tomar el pedido.")
 
@@ -46,7 +52,9 @@ async def add_items(db: AsyncSession, tenant_id: UUID, table_id: UUID, user_id: 
     if not order:
         mesa = (await db.execute(
             select(Table).where(Table.id == table_id, Table.tenant_id == tenant_id)
-        )).scalar_one()
+        )).scalar_one_or_none()
+        if not mesa:  # AUDIT-100: 404 limpio (antes .scalar_one() reventaba en 500)
+            raise HTTPException(404, "Mesa no encontrada")
         order = Order(
             tenant_id=tenant_id, branch_id=mesa.branch_id, session_id=sesion.id,
             table_id=table_id, waiter_id=user_id,
@@ -106,9 +114,11 @@ async def send_to_kitchen(db: AsyncSession, tenant_id: UUID, order_id: UUID) -> 
 
     ids = {i.recipe_id for i in order.items}
     recetas = {r.id: r for r in (await db.execute(
-        select(Recipe).where(Recipe.id.in_(ids))
+        select(Recipe).where(Recipe.tenant_id == tenant_id, Recipe.id.in_(ids))  # AUDIT-100
         .options(selectinload(Recipe.items).selectinload(RecipeItem.ingredient))
     )).scalars()}
+    if len(recetas) != len(ids):  # AUDIT-100: receta ajena/borrada → 409 claro, no KeyError
+        raise HTTPException(409, "El pedido tiene productos que ya no están en tu menú")
 
     warnings: list[str] = []
     for item in order.items:
@@ -125,7 +135,7 @@ async def send_to_kitchen(db: AsyncSession, tenant_id: UUID, order_id: UUID) -> 
 
 
 async def checkout(db: AsyncSession, tenant_id: UUID, table_id: UUID, datos) -> dict:
-    sesion = await sesion_abierta(db, table_id)
+    sesion = await sesion_abierta(db, table_id, tenant_id)  # AUDIT-100: con tenant
     if not sesion:
         raise HTTPException(409, "La mesa no tiene una cuenta abierta")
     order = await get_active_order(db, tenant_id, table_id)
@@ -163,7 +173,10 @@ async def order_a_out(db: AsyncSession, order: Order) -> dict:
     nombres = {}
     if ids:
         filas = (await db.execute(
-            select(Recipe.id, Recipe.name).where(Recipe.id.in_(ids))
+            select(Recipe.id, Recipe.name).where(
+                Recipe.tenant_id == order.tenant_id,  # AUDIT-100: con tenant
+                Recipe.id.in_(ids),
+            )
         )).all()
         nombres = {fila.id: fila.name for fila in filas}
     return {
@@ -192,10 +205,11 @@ def _recalcular(order: Order) -> None:
 
 
 async def _siguiente_numero(db: AsyncSession, tenant_id: UUID) -> str:
-    total = len((await db.execute(
-        select(Order.id).where(Order.tenant_id == tenant_id)
-    )).all())
-    return f"POS-{total + 1:06d}"
+    # AUDIT-100: func.count() en la BD (antes len(ids) cargaba TODOS los ids)
+    total = (await db.execute(
+        select(func.count(Order.id)).where(Order.tenant_id == tenant_id)
+    )).scalar_one()
+    return f"POS-{int(total or 0) + 1:06d}"
 
 
 async def _activo_obligatorio(db: AsyncSession, tenant_id: UUID, table_id: UUID) -> Order:
@@ -224,7 +238,10 @@ async def listar_cocina(db: AsyncSession, tenant_id: UUID) -> list[dict]:
     nombres_mesa = {}
     if ids_mesas:
         filas = (await db.execute(
-            select(Table.id, Table.name).where(Table.id.in_(ids_mesas))
+            select(Table.id, Table.name).where(
+                Table.tenant_id == tenant_id,  # AUDIT-100: con tenant
+                Table.id.in_(ids_mesas),
+            )
         )).all()
         nombres_mesa = {f.id: f.name for f in filas}
 
@@ -232,7 +249,10 @@ async def listar_cocina(db: AsyncSession, tenant_id: UUID) -> list[dict]:
     nombres_receta = {}
     if ids_recetas:
         filas = (await db.execute(
-            select(Recipe.id, Recipe.name).where(Recipe.id.in_(ids_recetas))
+            select(Recipe.id, Recipe.name).where(
+                Recipe.tenant_id == tenant_id,  # AUDIT-100: con tenant
+                Recipe.id.in_(ids_recetas),
+            )
         )).all()
         nombres_receta = {f.id: f.name for f in filas}
 
