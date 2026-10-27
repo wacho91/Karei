@@ -1,6 +1,6 @@
 """
 ═══════════════════════════════════════════════════════════════════════════════
- Kārei · saas_registro.py  ·  E-14z-i + FIX E-14y3  (Fase SaaS — registro
+ Kārei · saas_registro.py  ·  E-14z-i + FIX E-14y3b  (Fase SaaS — registro
                     + verificación + CORREO configurable DESDE LA APP)
 ═══════════════════════════════════════════════════════════════════════════════
 QUÉ ES
@@ -92,6 +92,7 @@ import secrets
 import smtplib
 import ssl
 import unicodedata
+import uuid
 from datetime import datetime, timedelta, timezone
 from email.header import Header
 from email.mime.text import MIMEText
@@ -296,10 +297,10 @@ def _html_prueba(host: str, puerto: int) -> str:
 
 
 if _env_configurado():
-    print(f"[saas_registro] E-14y3 listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
+    print(f"[saas_registro] E-14y3b listo · SMTP por variables de entorno → {SMTP_HOST}:{SMTP_PORT}"
           f" (en la app también puedes guardarlo: menú Correo, y esa config tiene prioridad)")
 else:
-    print("[saas_registro] E-14y3 listo · correo se configura desde la APP (menú Correo)"
+    print("[saas_registro] E-14y3b listo · correo se configura desde la APP (menú Correo)"
           " · sin config → modo dev (link por consola/pantalla)")
 
 
@@ -310,6 +311,12 @@ else:
 #     admin al login al abrir el menú Correo. Ahora usa el mecanismo
 #     probado de pos_mesas E-14y: candidatos de id STRING (con/sin
 #     guiones) + búsqueda por email de respaldo.
+#     FIX E-14y3b: los claims del JWT llegan como STRINGS, pero users.id
+#     es una columna UUID REAL — pasarle strings a User.id.in_(...) hace
+#     que SQLAlchemy lance "'str' object has no attribute 'hex'" (500 en
+#     /saas/correo/config). Ahora los candidatos se convierten a
+#     uuid.UUID y se consulta con el tipo correcto (con respaldo en crudo
+#     tolerado, por si otra instalación tuviera la columna como String).
 # ─────────────────────────────────────────────────────────────────────────
 _CLAIMS_ID = ("sub", "user_id", "id", "uid", "usuario_id", "userId", "user")
 _CLAIMS_EMAIL = ("email", "correo", "upn", "user_email")
@@ -350,6 +357,23 @@ def _candidatos_id(payload: dict) -> list:
     return candidatos
 
 
+def _candidatos_id_uuid(candidatos: list) -> list:
+    """FIX E-14y3b — De los candidatos crudos (strings del token) deja SOLO
+    los que son UUID válido, ya convertidos a uuid.UUID, que es el tipo
+    real de la columna users.id. '28c852c9-…' y '28c852c9…' terminan siendo
+    el MISMO UUID, así que no hay duplicados. Los que no son UUID (numéricos,
+    texto) se quedan fuera de esta lista (van en el respaldo en crudo)."""
+    out: list = []
+    for s in candidatos or []:
+        try:
+            uu = uuid.UUID(str(s))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        if uu not in out:
+            out.append(uu)
+    return out
+
+
 def _emails_de(payload: dict) -> list:
     """Emails candidatos desde los claims (respaldo si el id no aparece)."""
     out: list = []
@@ -367,12 +391,32 @@ async def _exigir_admin(request: Request, db: AsyncSession) -> User:
     u: Optional[User] = None
 
     if payload:
-        # 1) por id (acepta UUID/string/numérico, con y sin guiones)
+        # 1) por id — FIX E-14y3b: users.id es columna UUID REAL; los claims
+        #    del token llegan como str y pasarle strings a Uuid.in_() revienta
+        #    ('str' object has no attribute 'hex'). Se consulta con uuid.UUID.
         cand = _candidatos_id(payload)
-        if cand:
-            u = (await db.execute(
-                select(User).where(User.id.in_(cand)).limit(1)
-            )).scalar_one_or_none()
+        ids_uuid = _candidatos_id_uuid(cand)
+        if ids_uuid:
+            try:
+                u = (await db.execute(
+                    select(User).where(User.id.in_(ids_uuid)).limit(1)
+                )).scalar_one_or_none()
+            except Exception:
+                # p.ej. una instalación donde id sea String y rechace UUID
+                await db.rollback()
+                u = None
+
+        # 1b) respaldo: mismos candidatos EN CRUDO, por si la columna id
+        #     fuera String en otra instalación. Si es Uuid real, este query
+        #     levanta y se tolera (rollback + seguimos al email).
+        if u is None and cand:
+            try:
+                u = (await db.execute(
+                    select(User).where(User.id.in_(cand)).limit(1)
+                )).scalar_one_or_none()
+            except Exception:
+                await db.rollback()
+                u = None
 
         # 2) si el id no apareció, por email del token
         if u is None:
