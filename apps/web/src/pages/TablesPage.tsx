@@ -1,18 +1,20 @@
-// src/pages/TablesPage.tsx — v11 · POS Comedor
-// E-14t41: SWEETALERT2 EN TODA LA CUESTIÓN DE MESAS:
-//   · «🧹 Limpiar sin ventas» ya NO usa el confirm() nativo del navegador:
-//     ahora pide confirmación con confirmarAccion() (tema Kārei) y muestra
-//     el resumen (eliminadas/conservadas) en una ventana de éxito bonita.
-//   · El mapa (MapaMesas v2) también pide el confirm de eliminar con
-//     SweetAlert y pasa mesaId para resaltar la mesa abierta.
-//   · toastOk/alertaError siguen siendo las mismas funciones, pero ahora
-//     son toasts de SweetAlert (lib/alertas v2). NO se toca nada más.
+// src/pages/TablesPage.tsx — v12 · POS Comedor
+// E-14t54 (PRE-LANZAMIENTO): FUERA BOTONES DEV:
+//   · «Mesas demo», «🧹 Limpiar sin ventas» y «Diagnóstico» ELIMINADOS,
+//     junto con todo su código huérfano: import diagnosticoPos, handlers
+//     alDemo/alLimpiar, estado limpiando, refs crearDemo/limpiarSinVentas
+//     y los imports confirmarAccion/avisoExito que solo usaba la limpieza.
+//   · Las mesas se administran SOLO con «＋ Nueva mesa» y el eliminar mesa
+//     del mapa (SweetAlert), que son las funciones reales del restaurante.
+//   · NADA más cambia: barra En vivo, mapa, cuenta, borrador, menú rápido,
+//     cobro en vivo, PanelPago y tirilla quedan idénticos a la v11.
 // E-14x (se mantiene): MAPA DE MESAS EN VIVO de verdad (add-on pos_mesas.py):
 //   · Barra "En vivo · N mesas · X ocupadas · Y libres" (se refresca sola).
-//   · Botón "Limpiar sin ventas": elimina TODAS las mesas sin historial.
 //   · El modal "Nueva mesa" JAMÁS se queda en "Creando...": si el backend
 //     rechaza (409 duplicado, 401...), el error sale y el botón vuelve.
 //   · Estado vacío guiado cuando el restaurante aún no tiene mesas.
+// E-14t41 (se mantiene): SweetAlert2 en el mapa (confirm de eliminar mesa)
+//   y toasts de tema Kārei vía toastOk/alertaError (lib/alertas v2).
 // E-14v (se mantiene): al confirmar el COBRO se abre la TIRILLA sola.
 // E-14u (se mantiene): cobrarEnVivo acepta { method, tip } del PanelPago.
 // E-14t3 (se mantiene): el botón Cobrar YA COBRA de verdad.
@@ -29,8 +31,7 @@ import CajaSegura from '../components/mesas/CajaSegura';
 import PanelCuenta from './PanelCuenta';
 import Tirilla from '../components/facturacion/Tirilla';
 import * as apiModule from '../lib/api';
-import { diagnosticoPos } from '../lib/diagnosticoPos';
-import { toastOk, alertaError, confirmarAccion, avisoExito } from '../lib/alertas';
+import { toastOk, alertaError } from '../lib/alertas';
 
 const api: any = (apiModule as any).default ?? (apiModule as any).api ?? apiModule;
 
@@ -75,7 +76,6 @@ export default function TablesPage() {
   const [cuentaParaPago, setCuentaParaPago] = useState<any>(null);
   const [cobrando, setCobrando] = useState(false);
   const [tirillaPagoId, setTirillaPagoId] = useState<any>(null); // E-14v
-  const [limpiando, setLimpiando] = useState(false);
 
   const mesas: any[] = m.mesas ?? m.data ?? [];
   const total: number = Number(m.total ?? mesas.length) || 0;
@@ -83,9 +83,7 @@ export default function TablesPage() {
   const libres: number = Number(m.libres ?? Math.max(0, total - ocupadasN)) || 0;
   const recargar: () => any = m.recargar ?? m.cargar ?? (() => {});
   const crearMesa: (d: any) => any = m.crearMesa ?? m.crear ?? (async () => {});
-  const crearDemo: () => any = m.crearMesasDemo ?? m.crearDemo ?? m.crearMesas ?? (async () => {});
   const eliminarMesa = m.eliminarMesa ?? m.borrarMesa;
-  const limpiarSinVentas: () => any = m.limpiarSinVentas ?? m.limpiarSinHistorial ?? null;
   const mesaActual = mesas.find((x: any) => String(x?.id) === String(pos.mesaId));
 
   // Si el mapa manda la MESA completa, extraigo el id antes de guardar en el hook.
@@ -103,48 +101,6 @@ export default function TablesPage() {
     toastOk(`Mesa «${r?.nombre ?? r?.name ?? 'nueva'}» creada en ${r?.area ?? 'Salón'}`);
     setModalMesa(false);
     recargar();
-  };
-
-  const alDemo = async () => {
-    try {
-      const r: any = await crearDemo();
-      toastOk(`Demo: ${r?.creadas ?? 0} creadas · ${r?.omitidas ?? 0} ya existían`);
-      recargar();
-    } catch (e: any) { alertaError(e?.message ?? 'No pude crear las mesas demo'); }
-  };
-
-  // E-14x + E-14t41: LIMPIAR MESAS SIN HISTORIAL DE VENTAS (masivo).
-  // E-14t41: el confirm() nativo del navegador se reemplaza por SweetAlert
-  // y el resultado sale en una ventana de éxito con el detalle completo.
-  const alLimpiar = async () => {
-    if (!limpiarSinVentas || limpiando) return;
-    const ok = await confirmarAccion({
-      titulo: '¿Limpiar mesas sin ventas?',
-      texto:
-        'Se eliminarán TODAS las mesas que NO tienen historial de ventas.\n' +
-        'Las mesas con pedidos o pagos se conservan (trazabilidad contable).',
-      textoSi: 'Sí, limpiar el mapa',
-      peligro: true,
-    });
-    if (!ok) return;
-    setLimpiando(true);
-    try {
-      const r: any = await limpiarSinVentas();
-      if (r === false) { alertaError(m.errAccion ?? 'No se pudo limpiar el mapa'); return; }
-      const el: number = r?.eliminadas ?? 0;
-      const co: number = r?.conservadas ?? 0;
-      if (el === 0 && co === 0) {
-        await avisoExito('No había nada que limpiar', 'Todas las mesas tienen historial de ventas o el mapa está vacío.');
-      } else {
-        await avisoExito(
-          'Limpieza lista',
-          `Se eliminaron ${el} ${el === 1 ? 'mesa' : 'mesas'} sin ventas` +
-          (co > 0 ? ` y se conservaron ${co} con historial contable.` : '.'),
-        );
-      }
-    } finally {
-      setLimpiando(false);
-    }
   };
 
   // COBRAR EN VIVO (E-14t3 + E-14u): POST /pos/tables/{id}/cobrar del add-on.
@@ -200,15 +156,6 @@ export default function TablesPage() {
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={() => setModalMesa(true)} className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-sm font-semibold hover:bg-amber-400">＋ Nueva mesa</button>
-        <button onClick={alDemo} className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-sm hover:bg-slate-600">Mesas demo</button>
-        {limpiarSinVentas && total > 0 && (
-          <button onClick={alLimpiar} disabled={limpiando}
-            className="px-3 py-1.5 rounded-lg border border-red-500/40 text-red-300 text-sm hover:bg-red-500/10 disabled:opacity-50"
-            title="Elimina todas las mesas que NO tienen historial de ventas">
-            {limpiando ? 'Limpiando…' : '🧹 Limpiar sin ventas'}
-          </button>
-        )}
-        <button onClick={() => { try { (diagnosticoPos as any)(); } catch { /* ignora */ } }} className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 text-sm hover:bg-slate-800">Diagnóstico</button>
       </div>
       {total === 0 && !m.cargando && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-center">
