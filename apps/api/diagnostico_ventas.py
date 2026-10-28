@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · diagnostico_ventas.py (E-14t58) — RADIOGRAFÍA DE LA CAJA EN 5 SEGUNDOS
+Kārei · diagnostico_ventas.py (E-14t59) — RADIOGRAFÍA DE LA CAJA EN 5 SEGUNDOS
 ═════════════════════════════════════════════════════════════════════════════
 LA CADENA DE UNA VENTA (los 6 eslabones que este script verifica):
 
@@ -11,6 +11,15 @@ LA CADENA DE UNA VENTA (los 6 eslabones que este script verifica):
   [4] ¿De quién son sus ÓRDENES (la verdad E-14w-c)? → sección 4
   [5] ¿Tu usuario tiene tenant? ¿cuál?             → sección 2
   [6] ¿Qué vería CADA usuario tras la reparación?  → sección 5 (simulación)
+
+NOVEDAD E-14t59:
+  · FIX: URLs async (sqlite+aiosqlite:///...) se limpiaban en el orden
+    equivocado y el script moría con "No encontré la base". Ahora el
+    driver async se quita ANTES del prefijo.
+  · PLAN B: si la URL de settings apunta a un archivo que no existe, el
+    script cae a la base candidata que TENGA karei_payments con pagos.
+  · Sección [4.b]: muestra las últimas órdenes reales (id/status/tenant)
+    para cruzar el formato de los order_ids guardados en los pagos.
 
 QUÉ HACE: SOLO LEE la base — no escribe nada, no borra nada, no toca nada.
 
@@ -27,14 +36,36 @@ import sqlite3
 
 
 def _nombre_base(url: str) -> str:
-    return (str(url).replace("sqlite:///", "")
-            .replace("+aiosqlite", "").strip())
+    """URL de settings → ruta de archivo. FIX E-14t59: el driver async
+    (+aiosqlite) se quita ANTES del prefijo sqlite:/// — en el orden viejo
+    'sqlite+aiosqlite:///x.db' quedaba con el prefijo pegado y os.path.exists
+    decía que la base no existía (falsa alarma del E-14t58)."""
+    s = str(url).strip()
+    for drv in ("+aiosqlite", "+pysqlite", "+asyncpg", "+asyncmy"):
+        s = s.replace(drv, "")
+    if s.startswith("sqlite:///"):
+        s = s[len("sqlite:///"):]
+    elif s.startswith("sqlite:"):
+        s = s[len("sqlite:"):]
+    return s.strip()
 
 
-def resolver_db() -> str:
+def _pagos_en(ruta: str) -> int:
+    """Cuántos pagos hay en karei_payments de esa base (-1: no existe tabla)."""
+    try:
+        c = sqlite3.connect(ruta)
+        n = c.execute("SELECT COUNT(*) FROM karei_payments").fetchone()[0]
+        c.close()
+        return n
+    except Exception:
+        return -1
+
+
+def resolver_db():
+    """Devuelve (ruta, fuente, url_cruda)."""
     env = os.environ.get("KAREI_DATABASE_URL")
     if env:
-        return _nombre_base(env)
+        return _nombre_base(env), "KAREI_DATABASE_URL", env
     for modpath in ("app.core.config", "app.config", "app.settings",
                     "config", "settings"):
         try:
@@ -46,14 +77,13 @@ def resolver_db() -> str:
                    or getattr(s, "SQLALCHEMY_DATABASE_URL", None)
                    or getattr(s, "database_url", None))
             if url:
-                print(f"    (tomada de {modpath})")
-                return _nombre_base(url)
+                return _nombre_base(str(url)), modpath, str(url)
         except Exception:
             pass
     candidatos = (glob.glob("*.db") + glob.glob("*.sqlite*")
                   + glob.glob(os.path.join("app", "*.db"))
                   + glob.glob(os.path.join("backend", "*.db")))
-    return candidatos[0] if candidatos else ""
+    return (candidatos[0], "búsqueda local", "") if candidatos else ("", "", "")
 
 
 def _columnas(cx, tabla: str) -> set:
@@ -65,7 +95,7 @@ def _columnas(cx, tabla: str) -> set:
 
 def main():
     print("═" * 72)
-    print("  KĀREI · DIAGNÓSTICO DE VENTAS (E-14t58) — solo lectura")
+    print("  KĀREI · DIAGNÓSTICO DE VENTAS (E-14t59) — solo lectura")
     print("═" * 72)
 
     # ── [0] TODAS las bases candidatas (¿y si el backend usa OTRA?) ──────
@@ -78,25 +108,35 @@ def main():
         if f in vistas:
             continue
         vistas.append(f)
-        try:
-            cx0 = sqlite3.connect(f)
-            try:
-                n = cx0.execute(
-                    "SELECT COUNT(*) FROM karei_payments").fetchone()[0]
-                marca = f"← {n} pago(s) guardado(s)"
-            except Exception:
-                marca = "(sin tabla karei_payments)"
-            cx0.close()
-        except Exception as e:
-            marca = f"(no legible: {e})"
+        n = _pagos_en(f)
+        marca = (f"← {n} pago(s) guardado(s)" if n >= 0
+                 else "(sin tabla karei_payments)")
         print(f"    · {os.path.abspath(f)}  {marca}")
 
-    ruta = resolver_db()
+    # ── [1] BASE ELEGIDA (con PLAN B si la URL apunta a la nada) ────────
+    ruta, fuente, cruda = resolver_db()
+    if ruta and cruda and cruda != ruta:
+        print(f"\n[1] URL de {fuente}: {cruda}")
+    if ruta and not os.path.exists(ruta):
+        print(f"\n[!] La URL de {fuente} apunta a '{ruta}' y ESE ARCHIVO NO "
+              f"EXISTE aquí (desde {os.getcwd()}).")
+        print("    → PLAN B: busco entre las bases de [0] la que tenga pagos.")
+        ruta = ""
+    if not ruta:
+        mejor, n_mejor = "", -2
+        for f in vistas:
+            n = _pagos_en(f)
+            if n > n_mejor:
+                mejor, n_mejor = f, n
+        if mejor:
+            ruta = mejor
+            print(f"    → PLAN B elegido: {os.path.abspath(ruta)} "
+                  f"({n_mejor} pago(s))")
     if not ruta or not os.path.exists(ruta):
-        print(f"\n[✗] No encontré la base de datos desde {os.getcwd()}")
+        print(f"\n[✗] Sin base utilizable desde {os.getcwd()}")
         print("    Corre este script desde la carpeta del backend.")
         return
-    print(f"\n[1] BASE ELEGIDA: {os.path.abspath(ruta)}")
+    print(f"\n[1] BASE ELEGIDA: {os.path.abspath(ruta)}  (fuente: {fuente})")
     print("    (si esta NO es tu base, ese es el eslabón roto #1)")
     cx = sqlite3.connect(ruta)
     cx.row_factory = sqlite3.Row
@@ -199,6 +239,23 @@ def main():
             else:
                 ver = f"ÓRDENES MIXTAS {ts} → no adoptable, oculto"
             print(f"    · pago tirilla={p['ticket_no']} órdenes={len(oids)} → {ver}")
+
+    # ── [4.b] MUESTRA DE ÓRDENES RECIENTES (cruce de formato de ids) ────
+    if cols_o:
+        print("\n[4.b] ÚLTIMAS 8 ÓRDENES REALES (id · status · tenant):")
+        try:
+            filas = cx.execute(
+                "SELECT * FROM orders ORDER BY rowid DESC LIMIT 8").fetchall()
+            if not filas:
+                print("    (orders está VACÍA)")
+            for f in filas:
+                st = f["status"] if "status" in f.keys() else "?"
+                te = (f["tenant_id"] if "tenant_id" in f.keys()
+                      else "(sin columna)")
+                print(f"    · id={str(f['id'])[:36]:<36} "
+                      f"status={str(st):<12} tenant={te!r}")
+        except Exception as e:
+            print(f"    [✗] muestra no legible: {e}")
 
     # ── [5] SIMULACIÓN: qué vería CADA usuario (eslabón 6) ──────────────
     print("\n[5] SIMULACIÓN (reparación + filtro, IGUAL que el backend):")
