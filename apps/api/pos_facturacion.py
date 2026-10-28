@@ -1,13 +1,28 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14w-b) — FACTURACIÓN FASE 1: TIRILLA + CAJA
-═════════════════════════════════════════════════════════════════════════
+Kārei · pos_facturacion.py (E-14w-c) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+═══════════════════════════════════════════════════════════════════════════
+NUEVO EN E-14w-c (FIX: «en Ventas no salen las ventas»):
+· La VERDAD del dueño de un pago ya NO es la marca tenant_id de
+  karei_payments (el backfill del demo pudo marcarla mal), sino el
+  tenant de SUS ÓRDENES en la tabla core `orders` (escrita por el
+  order_service con el usuario autenticado).
+· Antes de filtrar, cada pago mal marcado se REPARA: si TODAS sus
+  órdenes son del restaurante que pide, se ADOPTA (UPDATE) y vuelve a
+  aparecer en historial + Informe Z. Si son de otro restaurante,
+  sigue oculto (aislamiento intacto).
+· El backfill que mandaba pagos huérfanos al tenant de admin@karei.app
+  quedó FUERA — era el que vandalizaba los pagos propios.
+· La tirilla individual (factura/{pago_id}) TAMBIÉN repara antes del
+  404: el botón 🧾 de un cobro mal marcado se re-adopta por sus órdenes.
+· Las respuestas dicen "version": "E-14w-c" para verificar en Swagger.
+
 NUEVO EN E-14w-b (COMPATIBILIDAD POSTGRES — deploy en la nube):
 · karei_config ya no usa DATETIME (no existe en Postgres) ni
   INSERT OR IGNORE (sintaxis SQLite) → TIMESTAMP + ON CONFLICT, que
   sirven igual en SQLite y Postgres.
 · Los ORDER BY dejan de usar rowid (tampoco existe en Postgres).
-· Las respuestas dicen "version": "E-14w-b" para que verifiques en
+· Las respuestas dicen "version": "E-14w-c" para que verifiques en
   Swagger qué archivo está vivo.
 ═════════════════════════════════════════════════════════════════════════════
 QUÉ ES
@@ -146,7 +161,7 @@ def _fecha_de(p: dict) -> Optional[datetime.datetime]:
     return None
 
 
-_log("E-14w-b activo — DB:", DB_URL)
+_log("E-14w-c activo — DB:", DB_URL)
 
 
 def _es_sqlite() -> bool:
@@ -189,7 +204,106 @@ def _tenant_de_request(request) -> Optional[str]:
         return None
 
 
+# E-14w-c: la VERDAD del dueño de un pago está en SUS ÓRDENES (tabla core
+# `orders`, escrita por el order_service con el usuario autenticado). La
+# marca tenant_id de karei_payments pudo quedar mal (backfill del demo).
+def _filas_de_ordenes(ids: list) -> dict:
+    """Devuelve {id_orden: tenant_id} leyendo la tabla core de órdenes.
+    Descubre tabla y columnas de forma defensiva (mismo espíritu que
+    _items_de_ordenes). Si no la encuentra, devuelve {} y el filtro
+    estricto decide como siempre."""
+    limpios: list = []
+    for x in (ids or []):
+        s = str(x or "").strip()
+        if s and s not in limpios:
+            limpios.append(s)
+    if not limpios:
+        return {}
+    try:
+        # E-14w-c-b: inspector sobre el ENGINE (Connection.get_bind() ya no
+        # existe en SQLAlchemy 2.1+ — así sirve en 1.4, 2.0 y 2.1+)
+        insp = sa_inspect(_engine)
+        existentes = set(insp.get_table_names())
+        tabla = None
+        for cand in ("orders", "order", "pos_orders"):
+            if cand in existentes:
+                tabla = cand
+                break
+        if not tabla:
+            return {}
+        cols = [c["name"] for c in insp.get_columns(tabla)]
+        cid = _primer_de(cols, ("id", "order_id", "pedido_id"))
+        cte = _primer_de(cols, ("tenant_id",))
+        if not cid or not cte:
+            return {}
+        duenos: dict = {}
+        with _engine.connect() as cx:
+            for i in range(0, min(len(limpios), 200), 50):
+                lote = limpios[i:i + 50]
+                ph = ",".join(f":i{n}" for n in range(len(lote)))
+                params = {f"i{n}": v for n, v in enumerate(lote)}
+                filas = cx.execute(text(
+                    f"SELECT {cid}, {cte} FROM {tabla} WHERE {cid} IN ({ph})"),
+                    params).all()
+                for id_o, te_o in filas:
+                    duenos[str(id_o)] = (str(te_o) if te_o is not None else None)
+        return duenos
+    except Exception as e:
+        _log("órdenes no legibles para reparación (sigo con el filtro):", e)
+        return {}
+
+
+def _reparar_dueno(pagos: list, tenant: Optional[str]) -> None:
+    """E-14w-c — EL DUEÑO DEL PAGO ES EL DUEÑO DE SUS ÓRDENES:
+    si el pago quedó marcado con un tenant que no es el del que pide
+    (vandalismo del backfill viejo, huérfano del demo…), pero TODAS sus
+    órdenes pertenecen al que pide → se ADOPTA (UPDATE persistente) y el
+    filtro lo deja pasar. Si ninguna orden es suya → sigue oculto."""
+    try:
+        mios = str(tenant or "")
+        pendientes = [p for p in pagos
+                      if str(p.get("tenant_id") or "") != mios]
+        if not pendientes:
+            return
+        ids: list = []
+        for p in pendientes:
+            for o in str(p.get("order_ids") or "").split(","):
+                o = o.strip()
+                if o and o not in ids:
+                    ids.append(o)
+        if not ids:
+            return  # sin órdenes no hay verdad mejor: decide el filtro
+        duenos = _filas_de_ordenes(ids[:200])
+        adoptados = []
+        for p in pendientes:
+            oids = [o.strip() for o in str(p.get("order_ids") or "").split(",")
+                    if o.strip()]
+            if not oids:
+                continue
+            t_ords = {str(duenos.get(o)) if duenos.get(o) is not None else ""
+                      for o in oids}
+            # E-14w-c-b: adoptar SOLO si TODAS las órdenes EXISTEN y son mías
+            # (si la tabla de órdenes no las encuentra, no hay verdad mejor:
+            # no se toca nada)
+            if all(o in duenos for o in oids) and t_ords == {mios}:
+                adoptados.append(p)
+        if not adoptados:
+            return
+        with _engine.begin() as cx:
+            for p in adoptados:
+                cx.execute(text(
+                    f"UPDATE {_TABLA_PAGOS} SET tenant_id = :t WHERE id = :i"),
+                    {"t": tenant, "i": str(p.get("id"))})
+        for p in adoptados:
+            p["tenant_id"] = tenant
+        _log(f"reparación E-14w-c: {len(adoptados)} pago(s) adoptado(s) — "
+             "el dueño real es el de sus órdenes")
+    except Exception as e:
+        _log("reparación de dueño no pudo correr (sigo con el filtro):", e)
+
+
 def _filtrar_por_tenant(pagos: list, tenant: Optional[str]) -> list:
+    _reparar_dueno(pagos, tenant)  # E-14w-c: primero la verdad de las órdenes
     if tenant:
         return [p for p in pagos if str(p.get("tenant_id") or "") == tenant]
     return [p for p in pagos if p.get("tenant_id") in (None, "")]
@@ -272,10 +386,10 @@ _TENANT_LISTO = {"hecho": False}
 
 
 def _asegurar_tenant_pagos() -> bool:
-    """E-14w: columna tenant_id en karei_payments + backfill de los pagos
-    viejos (del demo, sin dueño) al tenant del admin admin@karei.app.
-    Así los tenants NUEVOS nacen con la caja en cero y jamás ven datos
-    de otro restaurante. Idempotente: corre una sola vez por proceso."""
+    """E-14w: columna tenant_id en karei_payments si falta. Idempotente:
+    corre una sola vez por proceso. E-14w-c: el backfill al tenant de
+    admin@karei.app quedó FUERA (escondía pagos propios en Ventas);
+    los huérfanos ahora los adopta _reparar_dueno() por sus órdenes."""
     if _TENANT_LISTO["hecho"]:
         return True
     try:
@@ -287,13 +401,8 @@ def _asegurar_tenant_pagos() -> bool:
             except Exception as ea:
                 if "duplicate" not in str(ea).lower() and "exists" not in str(ea).lower():
                     _log("tenant_id sin ALTER (no crítico):", ea)
-            try:
-                cx.execute(text(
-                    f"UPDATE {_TABLA_PAGOS} SET tenant_id = ("
-                    "SELECT tenant_id FROM users WHERE email = 'admin@karei.app' "
-                    "LIMIT 1) WHERE tenant_id IS NULL"))
-            except Exception as eb:
-                _log("backfill de pagos viejos sin hacer (no crítico):", eb)
+            # E-14w-c: sin backfill al tenant de admin@karei.app — los
+            # huérfanos los adopta _reparar_dueno() (verdad = sus órdenes)
         _TENANT_LISTO["hecho"] = True
         return True
     except Exception as e:
@@ -367,7 +476,11 @@ def _tirilla_no(n) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 def _columnas(cx, tabla: str) -> list:
     try:
-        return [c["name"] for c in sa_inspect(cx.get_bind()).get_columns(tabla)]
+        try:
+            bind = cx.get_bind()   # Session (SQLAlchemy 1.4/2.0)
+        except Exception:
+            bind = _engine          # Connection 2.1+/fallback: engine directo
+        return [c["name"] for c in sa_inspect(bind).get_columns(tabla)]
     except Exception:
         try:
             filas = cx.execute(text(
@@ -460,7 +573,7 @@ def _items_de_ordenes(db, order_ids: list) -> list:
 @router.get("/api/v1/pos/facturacion/config")
 @router.get("/api/v1/pos/config/restaurante")
 def ver_config():
-    return {"version": "E-14w-b", "config": _config_dict()}
+    return {"version": "E-14w-c", "config": _config_dict()}
 
 
 @router.put("/api/v1/pos/facturacion/config")
@@ -486,7 +599,7 @@ def guardar_config(payload: Optional[dict] = None):
         except Exception as e:
             _log("config: clave sin guardar", clave, ":", e)
     _log("config actualizada:", guardados)
-    return {"version": "E-14w-b", "ok": True, "guardados": guardados,
+    return {"version": "E-14w-c", "ok": True, "guardados": guardados,
             "config": _config_dict()}
 
 
@@ -508,7 +621,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
             pagos = [dict(f) for f in filas]
     except Exception as e:
         _log("historial: no pude leer pagos:", e)
-        return {"version": "E-14w-b", "pagos": [], "n": 0, "total": 0,
+        return {"version": "E-14w-c", "pagos": [], "n": 0, "total": 0,
                 "currency": "COP"}
     # E-14w: fuera los pagos de otras empresas
     pagos = _filtrar_por_tenant(pagos, tenant)
@@ -526,7 +639,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
     off = max(0, int(offset or 0))
     total_all = round(sum(float(p.get("total") or 0) for p in pagos), 2)
     pagina = pagos[off:off + limit]
-    return {"version": "E-14w-b", "n": len(pagos), "total": total_all,
+    return {"version": "E-14w-c", "n": len(pagos), "total": total_all,
             "currency": "COP",
             "pagos": [{
                 "id": p.get("id"),
@@ -597,7 +710,7 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                if p.get("ticket_no") is not None]
     horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
     cfg = _config_dict()
-    return {"version": "E-14w-b", "tipo": "CIERRE DE CAJA (Informe Z)",
+    return {"version": "E-14w-c", "tipo": "CIERRE DE CAJA (Informe Z)",
             "fecha": f.strftime("%Y-%m-%d"),
             "generado_en": _now(),
             "n_pagos": len(del_dia),
@@ -635,6 +748,11 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
     pago = dict(f)
     # E-14w: la tirilla de otro restaurante NO existe pa' ti (404)
     te = _tenant_de_request(request)
+    # E-14w-c-b: antes de dar 404, la MISMA verdad de las órdenes — si el
+    # pago quedó mal marcado (backfill viejo / huérfano del demo) pero SUS
+    # órdenes son todas del que pide, se ADOPTA y la tirilla sale 🧾.
+    if str(pago.get("tenant_id") or "") != str(te or ""):
+        _reparar_dueno([pago], te)
     if te is not None:
         if str(pago.get("tenant_id") or "") != te:
             raise HTTPException(404, f"Pago {pago_id} no encontrado")
@@ -692,7 +810,7 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
         base, iva, total = subtotal, 0.0, round(subtotal + propina, 2)
 
     fp = _fecha_de(pago)
-    return {"version": "E-14w-b", "currency": "COP",
+    return {"version": "E-14w-c", "currency": "COP",
             "config": cfg,
             "pago": {"id": pago.get("id"),
                      "tirilla_no": _tirilla_no(pago.get("ticket_no")),
