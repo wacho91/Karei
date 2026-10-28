@@ -1,8 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_cuenta_live.py (E-14w-b) — CUENTA EN VIVO + COBRAR + REPORTES
-VERSION: E-14w-b · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14w-b"
+Kārei · pos_cuenta_live.py (E-14w-c) — CUENTA EN VIVO + COBRAR + REPORTES
+VERSION: E-14w-c · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14w-c"
+
+NUEVO EN E-14w-c (FIX: «en Ventas no salen las ventas»):
+· La VERDAD del dueño de un pago ya NO es la marca tenant_id (el
+  backfill del demo pudo marcarla mal), sino el tenant de SUS ÓRDENES
+  en la tabla core `orders`.
+· Antes de filtrar el reporte, cada pago mal marcado se REPARA: si
+  TODAS sus órdenes son del restaurante que pide, se ADOPTA (UPDATE)
+  y vuelve a aparecer en el panel "Pagos por método".
+· El backfill que mandaba pagos huérfanos al tenant de admin@karei.app
+  quedó FUERA (era el que vandalizaba los pagos propios).
+· El reporte dice "version": "E-14w-c" para verificar en Swagger.
 
 NUEVO EN E-14w-b (ARREGLO DEL PANEL "PAGOS POR MÉTODO" + POSTGRES):
 · ¿El dashboard te dice "No pude leer el reporte de pagos"? Tu
@@ -155,7 +166,7 @@ def _log(*args):
     print("[pos_cuenta_live]", *args)
 
 
-_log("E-14w-b activo — DB:", DB_URL)
+_log("E-14w-c activo — DB:", DB_URL)
 
 
 def _es_sqlite() -> bool:
@@ -213,7 +224,102 @@ def _tenant_de_request(request) -> Optional[str]:
         return None
 
 
+# E-14w-c: la VERDAD del dueño de un pago está en SUS ÓRDENES (tabla core
+# `orders`, escrita por el order_service con el usuario autenticado). La
+# marca tenant_id de karei_payments pudo quedar mal (backfill del demo).
+def _filas_de_ordenes(ids: list) -> dict:
+    """Devuelve {id_orden: tenant_id} leyendo la tabla core de órdenes.
+    Descubre tabla y columnas de forma defensiva (con _cols_de_tabla).
+    Si no la encuentra, devuelve {} y el filtro estricto decide."""
+    limpios: list = []
+    for x in (ids or []):
+        s = str(x or "").strip()
+        if s and s not in limpios:
+            limpios.append(s)
+    if not limpios:
+        return {}
+    try:
+        tabla = None
+        cols = set()
+        for cand in ("orders", "order", "pos_orders"):
+            cols = _cols_de_tabla(cand)
+            if cols:
+                tabla = cand
+                break
+        if not tabla:
+            return {}
+        cid = "id" if "id" in cols else (
+            "order_id" if "order_id" in cols else (
+                "pedido_id" if "pedido_id" in cols else None))
+        cte = "tenant_id" if "tenant_id" in cols else None
+        if not cid or not cte:
+            return {}
+        duenos: dict = {}
+        with _engine.connect() as cx:
+            for i in range(0, min(len(limpios), 200), 50):
+                lote = limpios[i:i + 50]
+                ph = ",".join(f":i{n}" for n in range(len(lote)))
+                params = {f"i{n}": v for n, v in enumerate(lote)}
+                filas = cx.execute(text(
+                    f"SELECT {cid}, {cte} FROM {tabla} WHERE {cid} IN ({ph})"),
+                    params).all()
+                for id_o, te_o in filas:
+                    duenos[str(id_o)] = (str(te_o) if te_o is not None else None)
+        return duenos
+    except Exception as e:
+        _log("órdenes no legibles para reparación (sigo con el filtro):", e)
+        return {}
+
+
+def _reparar_dueno(pagos: list, tenant: Optional[str]) -> None:
+    """E-14w-c — EL DUEÑO DEL PAGO ES EL DUEÑO DE SUS ÓRDENES:
+    si el pago quedó marcado con un tenant que no es el del que pide
+    (vandalismo del backfill viejo, huérfano del demo…), pero TODAS sus
+    órdenes pertenecen al que pide → se ADOPTA (UPDATE persistente) y el
+    filtro lo deja pasar. Si ninguna orden es suya → sigue oculto."""
+    try:
+        mios = str(tenant or "")
+        pendientes = [p for p in pagos
+                      if str(p.get("tenant_id") or "") != mios]
+        if not pendientes:
+            return
+        ids: list = []
+        for p in pendientes:
+            for o in str(p.get("order_ids") or "").split(","):
+                o = o.strip()
+                if o and o not in ids:
+                    ids.append(o)
+        if not ids:
+            return  # sin órdenes no hay verdad mejor: decide el filtro
+        duenos = _filas_de_ordenes(ids[:200])
+        adoptados = []
+        for p in pendientes:
+            oids = [o.strip() for o in str(p.get("order_ids") or "").split(",")
+                    if o.strip()]
+            if not oids:
+                continue
+            t_ords = {str(duenos.get(o)) if duenos.get(o) is not None else ""
+                      for o in oids}
+            # E-14w-c-b: adoptar SOLO si TODAS las órdenes EXISTEN y son mías
+            if all(o in duenos for o in oids) and t_ords == {mios}:
+                adoptados.append(p)
+        if not adoptados:
+            return
+        with _engine.begin() as cx:
+            for p in adoptados:
+                cx.execute(text(
+                    f"UPDATE {_TABLA_PAGOS} SET tenant_id = :t WHERE id = :i"),
+                    {"t": tenant, "i": str(p.get("id"))})
+        for p in adoptados:
+            p["tenant_id"] = tenant
+        _log(f"reparación E-14w-c: {len(adoptados)} pago(s) adoptado(s) — "
+             "el dueño real es el de sus órdenes")
+    except Exception as e:
+        _log("reparación de dueño no pudo correr (sigo con el filtro):", e)
+
+
 def _filtrar_por_tenant(pagos: list, tenant: Optional[str]) -> list:
+    _reparar_dueno(pagos, tenant)  # E-14w-c: primero la verdad de las órdenes
     if tenant:
         return [p for p in pagos if str(p.get("tenant_id") or "") == tenant]
     return [p for p in pagos if p.get("tenant_id") in (None, "")]
@@ -905,7 +1011,8 @@ def _asegurar_tabla_pagos() -> bool:
             except Exception as ea:
                 if "duplicate" not in str(ea).lower() and "exists" not in str(ea).lower():
                     _log("ticket_no sin ALTER (no crítico):", ea)
-            # E-14w: aislamiento por tenant — columna + backfill del demo
+            # E-14w: aislamiento por tenant — columna (E-14w-c: SIN backfill
+            # al tenant de admin@karei.app — huérfanos los adopta _reparar_dueno)
             try:
                 cx.execute(text(
                     f"ALTER TABLE {_TABLA_PAGOS} ADD COLUMN tenant_id VARCHAR(36)"))
@@ -913,13 +1020,6 @@ def _asegurar_tabla_pagos() -> bool:
             except Exception as ea:
                 if "duplicate" not in str(ea).lower() and "exists" not in str(ea).lower():
                     _log("tenant_id sin ALTER (no crítico):", ea)
-            try:
-                cx.execute(text(
-                    f"UPDATE {_TABLA_PAGOS} SET tenant_id = ("
-                    "SELECT tenant_id FROM users WHERE email = 'admin@karei.app' "
-                    "LIMIT 1) WHERE tenant_id IS NULL"))
-            except Exception as eb:
-                _log("backfill de pagos viejos sin hacer (no crítico):", eb)
         _PAGOS_LISTA["hecho"] = True
         _log("tabla de pagos lista:", _TABLA_PAGOS)
         return True
@@ -1109,7 +1209,7 @@ def reporte_pagos(request: Request):
             "fecha": (f.strftime("%Y-%m-%d") if f else None),
         })
 
-    return {"version": "E-14w-b",  # E-14w-b: así verificas en Swagger que ESTE archivo está vivo
+    return {"version": "E-14w-c",  # E-14w-c: así verificas en Swagger que ESTE archivo está vivo
             "generado_en": ahora.isoformat(sep=" ", timespec="seconds"),
             "resumen": resumen, "por_metodo": por_metodo,
             "metodos": [m["metodo"] for m in por_metodo],
@@ -1129,3 +1229,6 @@ _log("E-14w: AISLAMIENTO POR TENANT activo · pagos marcados con tenant_id · "
 _log("E-14w-b: reporte TAMBIÉN sin /api/v1 (12 rutas) · compatible "
      "Postgres (sin rowid/pragma/DATETIME) · el panel del dashboard "
      "vuelve a la vida ✓")
+_log("E-14w-c: la VERDAD del dueño del pago es el tenant de sus ÓRDENES "
+     "· pagos mal marcados se reparan y ADOPTAN al dueño real · "
+     "backfill al demo FUERA · Ventas y Dashboard vuelven a ver la caja ✓")
