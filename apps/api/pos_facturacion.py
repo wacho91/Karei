@@ -1,21 +1,46 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14w-e) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+Kārei · pos_facturacion.py (E-14w-f) — FACTURACIÓN FASE 1: TIRILLA + CAJA
 ═════════════════════════════════════════════════════════════════════════
+NUEVO EN E-14w-f (LA RUTA QUE FALTABA — cura del modal «No pude armar el
+cuadre» del botón «🖨️ Cuadre del día (Z)» en Ventas):
+· HALLAZGO (E-14t64): ese botón abre el componente CuadreDia.tsx, que pide
+  GET /pos/facturacion/cuadre. ESA RUTA NUNCA SE MONTÓ EN EL BACKEND: el
+  add-on solo tenía /cierre, con la forma plana que alimenta las tarjetas
+  de la página (no el papel). El 404 disparaba el modal:
+      «No pude armar el cuadre. Revisa que el backend tenga
+       pos_facturacion.py (E-14w) y reinicia uvicorn.»
+  No era tu red ni tu base: era una ruta que jamás existió. Mi culpa, socio.
+· CURA: NUEVA RUTA GET /pos/facturacion/cuadre (alias /cuadre-del-dia) que
+  devuelve EXACTAMENTE lo que CuadreDia.tsx pinta en el Informe Z:
+    config        → nombre, NIT, dirección, ciudad, teléfono, régimen,
+                    resolución DIAN (número/fecha/prefijo/rango), software
+    resumen       → n_pagos, venta_total (sin propina), base, iva, iva_pct,
+                    iva_incluido, leyenda_iva, propinas, gran_total
+    por_producto  → LO QUE SE VENDIÓ plato a plato (leído de order_items de
+                    las órdenes del día; un cobro sin ítems legibles entra
+                    como «Consumo en mesa» pa' que el papel cuadre con la
+                    plata)
+    por_metodo    → efectivo / tarjeta / nequi / otros (n, total, propina)
+    tickets       → rango del día (POS1-000001 → …) y primer/último cobro
+· /cierre y /cierre-de-caja AHORA DEVUELVEN LO MISMO que /cuadre: las
+  llaves planas de siempre quedan INTACTAS (fecha, n_pagos, subtotal,
+  propina, total, por_metodo, primer_pago, ultimo_pago, tickets,
+  resolucion) y ARRIBA se suman config/resumen/por_producto — VentasPage
+  no se entera del cambio, solo gana.
+· Sin header Authorization = modo consola local: el cuadre enseña toda la
+  caja del día (misma regla de las demás rutas).
+· SELLO: todas las respuestas dicen "version": "E-14w-f" — si Swagger aún
+  dice E-14w-e, el archivo no fue reemplazado (o hay OTRA copia: corre
+  verifica_backend.py y mira la sección [A]).
+· Lo demás queda IDÉNTICO a E-14w-e (sellos, radiografía «diag», guard de
+  la tirilla) — el historial de curas sigue abajo.
+
 NUEVO EN E-14w-e (LA CURA A MEDIAS — por qué el dashboard sí y /ventas no):
-· TU ESTADO DEL 30-OCT: pos_cuenta_live E-14w-d ya está vivo (el dashboard
-  ve los 4 cobros / $568.700 = la predicción EXACTA del banco de pruebas),
-  pero /ventas sigue en $0. ESO SOLO PASA CON ESTE ARCHIVO VIEJO: el
-  facturacion viejo tiene el bug de los guiones del JWT → no resuelve tu
-  tenant → y su modo legacy SOLO enseña pagos huérfanos. Como la cura
-  E-14w-d ya les puso dueño verdadero a tus pagos, pa' el facturacion
-  viejo dejan de existir. La cura: reemplazar ESTE archivo completo.
-· SELLO: todas las respuestas dicen "version": "E-14w-e" — si Swagger
-  aún dice E-14w-c, el archivo no fue reemplazado (o hay OTRA copia en
-  otro folder: corre verifica_backend.py y mira la sección [A]).
-· RADIOGRAFÍA: /pos/facturacion/pagos y /cierre devuelven además "diag"
-  {con_token, tenant, leidos, tras_tenant, tras_dias, muestra} — si algo
-  volviera a fallar, el propio JSON te dice en qué filtro se perdió.
+· pos_cuenta_live E-14w-d ya estaba vivo pero /ventas seguía en $0: el
+  facturacion viejo tenía el bug de los guiones del JWT. Sellos de versión
+  + radiografía «diag» {con_token, tenant, leidos, tras_tenant, …} + guard
+  en la tirilla.
 
 NUEVO EN E-14w-d-b (FIX CAUSA RAÍZ — mismo hallazgo que pos_cuenta_live E-14w-d):
 · HALLAZGO FORENSE: el sub del JWT es un UUID CON guiones y users.id
@@ -61,8 +86,10 @@ modelos, tus routers ni tu pos_compat.py). Agrega 4 piezas:
      pantalla Ventas → "⚙ Datos del restaurante" (o por API).
   2. HISTORIAL DE PAGOS      → GET /pos/facturacion/pagos (filtros por
      días y método) — la tabla de la página Ventas.
-  3. CIERRE DE CAJA (Informe Z, lo que exige la DIAN al POS)
-                             → GET /pos/facturacion/cierre?fecha=YYYY-MM-DD
+  3. CIERRE DE CAJA / CUADRE DEL DÍA (Informe Z, lo que exige la DIAN
+     al POS) → GET /pos/facturacion/cuadre  ·  E-14w-f: también responde
+     /cierre y /cierre-de-caja (con fecha=YYYY-MM-DD opcional) — las tres
+     rutas devuelven el MISMO payload
   4. TIRILLA / FACTURA       → GET /pos/facturacion/factura/{pago_id} con
      todo lo que pide el art. 617 ET + Res. 42/2020 en lo que aplica sin
      resolución real: razón social, NIT, consecutivo, fecha/hora, ítems
@@ -187,7 +214,7 @@ def _fecha_de(p: dict) -> Optional[datetime.datetime]:
     return None
 
 
-_log("E-14w-e activo — DB:", DB_URL)
+_log("E-14w-f activo — DB:", DB_URL)
 
 
 def _es_sqlite() -> bool:
@@ -614,7 +641,7 @@ def _items_de_ordenes(db, order_ids: list) -> list:
 @router.get("/api/v1/pos/facturacion/config")
 @router.get("/api/v1/pos/config/restaurante")
 def ver_config():
-    return {"version": "E-14w-e", "config": _config_dict()}
+    return {"version": "E-14w-f", "config": _config_dict()}
 
 
 @router.put("/api/v1/pos/facturacion/config")
@@ -640,7 +667,7 @@ def guardar_config(payload: Optional[dict] = None):
         except Exception as e:
             _log("config: clave sin guardar", clave, ":", e)
     _log("config actualizada:", guardados)
-    return {"version": "E-14w-e", "ok": True, "guardados": guardados,
+    return {"version": "E-14w-f", "ok": True, "guardados": guardados,
             "config": _config_dict()}
 
 
@@ -665,7 +692,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
             pagos = [dict(f) for f in filas]
     except Exception as e:
         _log("historial: no pude leer pagos:", e)
-        return {"version": "E-14w-e", "pagos": [], "n": 0, "total": 0,
+        return {"version": "E-14w-f", "pagos": [], "n": 0, "total": 0,
                 "currency": "COP",
                 "diag": {"con_token": bool(con_token), "tenant": tenant,
                          "leidos": 0, "tras_tenant": 0, "tras_dias": 0,
@@ -697,7 +724,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
     off = max(0, int(offset or 0))
     total_all = round(sum(float(p.get("total") or 0) for p in pagos), 2)
     pagina = pagos[off:off + limit]
-    return {"version": "E-14w-e", "n": len(pagos), "total": total_all,
+    return {"version": "E-14w-f", "n": len(pagos), "total": total_all,
             "currency": "COP",
             "diag": {"con_token": bool(con_token), "tenant": tenant,
                      "leidos": n_leidos, "tras_tenant": n_tras_tenant,
@@ -715,10 +742,12 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
             } for p in pagina]}
 
 
-# 5.c CIERRE DE CAJA (Informe Z — requisito POS de la DIAN)
-@router.get("/api/v1/pos/facturacion/cierre")
-@router.get("/api/v1/pos/facturacion/cierre-de-caja")
-def cierre_de_caja(request: Request, fecha: Optional[str] = None):
+# 5.c CUADRE DEL DÍA / CIERRE DE CAJA (Informe Z — requisito POS de la DIAN)
+# E-14w-f: UN SOLO ARMADOR pa' 4 rutas. /cuadre (la que pide CuadreDia.tsx
+# y NUNCA existió → era el modal «No pude armar el cuadre»), /cierre y
+# /cierre-de-caja (las de VentasPage: mismas llaves planas de siempre +
+# config/resumen/por_producto arriba) y /cuadre-del-dia (alias legible).
+def _armar_cuadre(request: Request, fecha: Optional[str]) -> dict:
     # E-14w: el Informe Z de cada restaurante es SOLO suyo
     # E-14w-e: SIN header Authorization = modo consola local → toda la caja
     con_token = str(getattr(request, "headers", {}).get("authorization")
@@ -730,7 +759,7 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
         try:
             f = datetime.datetime.strptime(fecha, "%Y-%m-%d")
         except ValueError:
-            raise HTTPException(422, "fecha debe ser YYYY-MM-DD")
+            raise HTTPException(422, "fecha debe ser YYYY-MM-DD (ej: 2026-10-29)")
     if f is None:
         ahora = datetime.datetime.now()
         f = datetime.datetime(ahora.year, ahora.month, ahora.day)
@@ -745,7 +774,7 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                 + (", rowid" if _es_sqlite() else ""))).mappings().all()  # E-14w-b
             pagos = [dict(x) for x in filas]
     except Exception as e:
-        _log("cierre: no pude leer pagos:", e)
+        _log("cuadre: no pude leer pagos:", e)
     n_leidos = len(pagos)  # E-14w-e: radiografía del Informe Z
     # E-14w: fuera los pagos de otras empresas (E-14w-e: solo CON token)
     if con_token:
@@ -778,15 +807,83 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                if p.get("ticket_no") is not None]
     horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
     cfg = _config_dict()
-    return {"version": "E-14w-e", "tipo": "CIERRE DE CAJA (Informe Z)",
+    subtotal = round(sum(float(p.get("subtotal") or 0) for p in del_dia), 2)
+    propinas = round(sum(float(p.get("tip") or 0) for p in del_dia), 2)
+    recaudo = round(sum(float(p.get("total") or 0) for p in del_dia), 2)
+
+    # E-14w-f: IVA discriminado — MISMO cálculo de la tirilla (5.d), pa' que
+    # el papel del Z y la tirilla cuenten la plata con la misma regla.
+    # NOTA: con iva_incluido=si (fase 1) venta_total = subtotal y
+    # gran_total = recaudo (lo cobrado). Si un día activas IVA por agregar,
+    # el recaudo por método sigue el total COBRADO en karei_payments.
+    try:
+        pct = float(cfg.get("iva_pct") or 0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    incluido = str(cfg.get("iva_incluido") or "si").strip().lower() in (
+        "si", "sí", "true", "1", "yes")
+    if pct > 0 and incluido:
+        base = round(subtotal / (1 + pct / 100.0), 2)
+        iva = round(subtotal - base, 2)
+    elif pct > 0:
+        base = subtotal
+        iva = round(subtotal * pct / 100.0, 2)
+    else:
+        base, iva = subtotal, 0.0
+    venta_total = round(subtotal + (0.0 if incluido else iva), 2)
+    gran_total = round(venta_total + propinas, 2)
+
+    # E-14w-f: LO QUE SE VENDIÓ plato a plato — se leen los order_items de
+    # TODAS las órdenes de los cobros del día y se agregan por nombre. A los
+    # cobros sin ítems legibles los cuadra una línea «Consumo en mesa».
+    por_producto = []
+    ids: list = []
+    for p in del_dia:
+        for o in str(p.get("order_ids") or "").split(","):
+            o = o.strip()
+            if o and o not in ids:
+                ids.append(o)
+    items = []
+    if ids:
+        db = _SessionLocal()
+        try:
+            items = _items_de_ordenes(db, ids[:200])
+        except Exception as e:
+            _log("cuadre: ítems del día no legibles (uso fallback):", e)
+            items = []
+        finally:
+            db.close()
+    agg: dict = {}
+    for it in items:
+        k = str(it.get("nombre") or "Producto")
+        a = agg.setdefault(k, {"nombre": k, "cantidad": 0, "total": 0.0})
+        try:
+            a["cantidad"] += int(float(it.get("cantidad") or 1))
+        except (TypeError, ValueError):
+            a["cantidad"] += 1
+        try:
+            a["total"] = round(a["total"] + float(it.get("total") or 0), 2)
+        except (TypeError, ValueError):
+            pass
+    por_producto = sorted(agg.values(), key=lambda x: -x["total"])
+    suma_items = round(sum(float(x["total"]) for x in por_producto), 2)
+    if suma_items < subtotal - 0.5:
+        por_producto.append({"nombre": "Consumo en mesa",
+                             "cantidad": len(del_dia),
+                             "total": round(subtotal - suma_items, 2)})
+        por_producto.sort(key=lambda x: -x["total"])
+
+    return {"version": "E-14w-f", "tipo": "CIERRE DE CAJA (Informe Z)",
             "fecha": f.strftime("%Y-%m-%d"),
             "generado_en": _now(),
             "n_pagos": len(del_dia),
             "diag": {"con_token": bool(con_token), "tenant": tenant,
-                     "leidos": n_leidos, "tras_tenant": n_tras_tenant},
-            "subtotal": round(sum(float(p.get("subtotal") or 0) for p in del_dia), 2),
-            "propina": round(sum(float(p.get("tip") or 0) for p in del_dia), 2),
-            "total": round(sum(float(p.get("total") or 0) for p in del_dia), 2),
+                     "leidos": n_leidos, "tras_tenant": n_tras_tenant,
+                     "tras_dia": len(del_dia)},
+            # ── llaves planas de SIEMPRE (VentasPage las sigue pintando) ──
+            "subtotal": subtotal,
+            "propina": propinas,
+            "total": recaudo,
             "por_metodo": por_metodo,
             "primer_pago": (horas[0].strftime("%H:%M") if horas else None),
             "ultimo_pago": (horas[-1].strftime("%H:%M") if horas else None),
@@ -798,7 +895,27 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                 "rango": f"{cfg.get('resolucion_prefijo')}-{cfg.get('resolucion_rango_ini')} "
                          f"a {cfg.get('resolucion_prefijo')}-{cfg.get('resolucion_rango_fin')}",
                 "vigencia": cfg.get("resolucion_vigencia")},
+            # ── llaves NUEVAS (CuadreDia.tsx pinta el Informe Z con estas) ──
+            "config": cfg,
+            "resumen": {"n_pagos": len(del_dia),
+                        "venta_total": venta_total,
+                        "gran_total": gran_total,
+                        "subtotal": subtotal,
+                        "propinas": propinas,
+                        "base": base, "iva": iva, "iva_pct": pct,
+                        "iva_incluido": incluido,
+                        "leyenda_iva": ("IVA incluido en los precios"
+                                        if incluido else "IVA por agregar")},
+            "por_producto": por_producto,
             "currency": "COP"}
+
+
+@router.get("/api/v1/pos/facturacion/cierre")
+@router.get("/api/v1/pos/facturacion/cierre-de-caja")
+@router.get("/api/v1/pos/facturacion/cuadre")
+@router.get("/api/v1/pos/facturacion/cuadre-del-dia")
+def cuadre_del_dia(request: Request, fecha: Optional[str] = None):
+    return _armar_cuadre(request, fecha)
 
 
 # 5.d TIRILLA / FACTURA por pago_id — alimenta el componente Tirilla.tsx
@@ -886,7 +1003,7 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
         base, iva, total = subtotal, 0.0, round(subtotal + propina, 2)
 
     fp = _fecha_de(pago)
-    return {"version": "E-14w-e", "currency": "COP",
+    return {"version": "E-14w-f", "currency": "COP",
             "config": cfg,
             "pago": {"id": pago.get("id"),
                      "tirilla_no": _tirilla_no(pago.get("ticket_no")),
@@ -903,4 +1020,4 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
 
 
 # SELLO ANTI-CORTE: si en el chat NO ves esta línea, el archivo llegó cortado.
-_log("sección 5.d montada — pos_facturacion E-14w-e COMPLETO (fin del archivo)")
+_log("sección 5.d montada — pos_facturacion E-14w-f COMPLETO (fin del archivo)")
