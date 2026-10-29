@@ -1,7 +1,33 @@
 """
 ═════════════════════════════════════════════════════════════════════════════
-Kārei · pos_facturacion.py (E-14w-c) — FACTURACIÓN FASE 1: TIRILLA + CAJA
-═══════════════════════════════════════════════════════════════════════════
+Kārei · pos_facturacion.py (E-14w-e) — FACTURACIÓN FASE 1: TIRILLA + CAJA
+═════════════════════════════════════════════════════════════════════════
+NUEVO EN E-14w-e (LA CURA A MEDIAS — por qué el dashboard sí y /ventas no):
+· TU ESTADO DEL 30-OCT: pos_cuenta_live E-14w-d ya está vivo (el dashboard
+  ve los 4 cobros / $568.700 = la predicción EXACTA del banco de pruebas),
+  pero /ventas sigue en $0. ESO SOLO PASA CON ESTE ARCHIVO VIEJO: el
+  facturacion viejo tiene el bug de los guiones del JWT → no resuelve tu
+  tenant → y su modo legacy SOLO enseña pagos huérfanos. Como la cura
+  E-14w-d ya les puso dueño verdadero a tus pagos, pa' el facturacion
+  viejo dejan de existir. La cura: reemplazar ESTE archivo completo.
+· SELLO: todas las respuestas dicen "version": "E-14w-e" — si Swagger
+  aún dice E-14w-c, el archivo no fue reemplazado (o hay OTRA copia en
+  otro folder: corre verifica_backend.py y mira la sección [A]).
+· RADIOGRAFÍA: /pos/facturacion/pagos y /cierre devuelven además "diag"
+  {con_token, tenant, leidos, tras_tenant, tras_dias, muestra} — si algo
+  volviera a fallar, el propio JSON te dice en qué filtro se perdió.
+
+NUEVO EN E-14w-d-b (FIX CAUSA RAÍZ — mismo hallazgo que pos_cuenta_live E-14w-d):
+· HALLAZGO FORENSE: el sub del JWT es un UUID CON guiones y users.id
+  vive en CHAR(32) SIN guiones → WHERE id = :u en crudo no encontraba
+  nada → _tenant_de_request devolvía None EN SILENCIO → historial,
+  Informe Z y tirillas quedaban a merced del modo legacy.
+· FIX 1 — _tenant_de_request prueba el id EXACTO, el id SIN guiones y
+  (si el sub es un email) por email. Se acabó el fallo silencioso.
+· FIX 3 — MODO CONSOLA: llamadas SIN header Authorization ven toda la
+  caja (no hay identidad con quien aislar). Con token → aislado por
+  tenant + reparación por órdenes, igual que siempre.
+
 NUEVO EN E-14w-c (FIX: «en Ventas no salen las ventas»):
 · La VERDAD del dueño de un pago ya NO es la marca tenant_id de
   karei_payments (el backfill del demo pudo marcarla mal), sino el
@@ -161,7 +187,7 @@ def _fecha_de(p: dict) -> Optional[datetime.datetime]:
     return None
 
 
-_log("E-14w-c activo — DB:", DB_URL)
+_log("E-14w-e activo — DB:", DB_URL)
 
 
 def _es_sqlite() -> bool:
@@ -195,9 +221,24 @@ def _tenant_de_request(request) -> Optional[str]:
         uid = payload.get("sub") or payload.get("user_id") or payload.get("id")
         if not uid:
             return None
+        # E-14w-e FIX DEL SILENCIO: el sub del JWT suele ser UUID CON
+        # guiones y users.id vive en CHAR(32) SIN guiones. Probamos el
+        # valor exacto, el valor sin guiones y (si parece email) email.
+        cands = [str(uid).strip()]
+        limpio = cands[0].replace("-", "")
+        if limpio and limpio not in cands:
+            cands.append(limpio)
         with _engine.connect() as cx:
-            fila = cx.execute(text("SELECT tenant_id FROM users WHERE id = :u"),
-                              {"u": str(uid)}).first()
+            if "@" in cands[0]:
+                fila = cx.execute(text(
+                    "SELECT tenant_id FROM users WHERE email = :u"),
+                    {"u": cands[0]}).first()
+                if fila and fila[0] is not None:
+                    return str(fila[0])
+            ph = ",".join(f":u{i}" for i in range(len(cands)))
+            params = {f"u{i}": c for i, c in enumerate(cands)}
+            fila = cx.execute(text(
+                f"SELECT tenant_id FROM users WHERE id IN ({ph})"), params).first()
             return (str(fila[0]) if fila and fila[0] is not None else None)
     except Exception as e:
         _log("tenant sin resolver (sigo en modo legacy):", e)
@@ -296,7 +337,7 @@ def _reparar_dueno(pagos: list, tenant: Optional[str]) -> None:
                     {"t": tenant, "i": str(p.get("id"))})
         for p in adoptados:
             p["tenant_id"] = tenant
-        _log(f"reparación E-14w-c: {len(adoptados)} pago(s) adoptado(s) — "
+        _log(f"reparación E-14w-d: {len(adoptados)} pago(s) adoptado(s) — "
              "el dueño real es el de sus órdenes")
     except Exception as e:
         _log("reparación de dueño no pudo correr (sigo con el filtro):", e)
@@ -573,7 +614,7 @@ def _items_de_ordenes(db, order_ids: list) -> list:
 @router.get("/api/v1/pos/facturacion/config")
 @router.get("/api/v1/pos/config/restaurante")
 def ver_config():
-    return {"version": "E-14w-c", "config": _config_dict()}
+    return {"version": "E-14w-e", "config": _config_dict()}
 
 
 @router.put("/api/v1/pos/facturacion/config")
@@ -599,7 +640,7 @@ def guardar_config(payload: Optional[dict] = None):
         except Exception as e:
             _log("config: clave sin guardar", clave, ":", e)
     _log("config actualizada:", guardados)
-    return {"version": "E-14w-c", "ok": True, "guardados": guardados,
+    return {"version": "E-14w-e", "ok": True, "guardados": guardados,
             "config": _config_dict()}
 
 
@@ -609,6 +650,9 @@ def guardar_config(payload: Optional[dict] = None):
 def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = None,
                     limit: int = 100, offset: int = 0):
     # E-14w: cada restaurante solo ve SUS cobros
+    # E-14w-e: SIN header Authorization = modo consola local → toda la caja
+    con_token = str(getattr(request, "headers", {}).get("authorization")
+                    or "").lower().startswith("bearer ")
     _asegurar_tenant_pagos()
     tenant = _tenant_de_request(request)
     pagos = []
@@ -621,10 +665,23 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
             pagos = [dict(f) for f in filas]
     except Exception as e:
         _log("historial: no pude leer pagos:", e)
-        return {"version": "E-14w-c", "pagos": [], "n": 0, "total": 0,
-                "currency": "COP"}
-    # E-14w: fuera los pagos de otras empresas
-    pagos = _filtrar_por_tenant(pagos, tenant)
+        return {"version": "E-14w-e", "pagos": [], "n": 0, "total": 0,
+                "currency": "COP",
+                "diag": {"con_token": bool(con_token), "tenant": tenant,
+                         "leidos": 0, "tras_tenant": 0, "tras_dias": 0,
+                         "error_lectura": str(e)[:120]}}
+    # E-14w-e: radiografía — cuántos sobreviven a CADA filtro (el front
+    # ignora este bloque; Swagger lo muestra pa' diagnosticar al instante)
+    n_leidos = len(pagos)
+    muestra = [{"id": str(p.get("id") or "")[-6:],
+                "tenant": (str(p.get("tenant_id"))[:8] if p.get("tenant_id") else None),
+                "fecha": (_fecha_de(p).strftime("%d-%m %H:%M") if _fecha_de(p) else None),
+                "metodo": p.get("method"), "total": p.get("total")}
+               for p in pagos[:3]]
+    # E-14w: fuera los pagos de otras empresas (E-14w-e: solo CON token)
+    if con_token:
+        pagos = _filtrar_por_tenant(pagos, tenant)
+    n_tras_tenant = len(pagos)
     desde = None
     if dias and int(dias) > 0:
         d0 = datetime.datetime.now() - datetime.timedelta(days=int(dias))
@@ -632,6 +689,7 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
     if desde is not None:
         pagos = [p for p in pagos
                  if (f := _fecha_de(p)) is not None and f >= desde]
+    n_tras_dias = len(pagos)
     if metodo:
         m = str(metodo).strip().lower()
         pagos = [p for p in pagos if str(p.get("method") or "") == m]
@@ -639,8 +697,12 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
     off = max(0, int(offset or 0))
     total_all = round(sum(float(p.get("total") or 0) for p in pagos), 2)
     pagina = pagos[off:off + limit]
-    return {"version": "E-14w-c", "n": len(pagos), "total": total_all,
+    return {"version": "E-14w-e", "n": len(pagos), "total": total_all,
             "currency": "COP",
+            "diag": {"con_token": bool(con_token), "tenant": tenant,
+                     "leidos": n_leidos, "tras_tenant": n_tras_tenant,
+                     "tras_dias": n_tras_dias, "tras_metodo": len(pagos),
+                     "muestra": muestra},
             "pagos": [{
                 "id": p.get("id"),
                 "tirilla_no": _tirilla_no(p.get("ticket_no")),
@@ -658,6 +720,9 @@ def historial_pagos(request: Request, dias: int = 7, metodo: Optional[str] = Non
 @router.get("/api/v1/pos/facturacion/cierre-de-caja")
 def cierre_de_caja(request: Request, fecha: Optional[str] = None):
     # E-14w: el Informe Z de cada restaurante es SOLO suyo
+    # E-14w-e: SIN header Authorization = modo consola local → toda la caja
+    con_token = str(getattr(request, "headers", {}).get("authorization")
+                    or "").lower().startswith("bearer ")
     _asegurar_tenant_pagos()
     tenant = _tenant_de_request(request)
     f = None
@@ -681,8 +746,11 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
             pagos = [dict(x) for x in filas]
     except Exception as e:
         _log("cierre: no pude leer pagos:", e)
-    # E-14w: fuera los pagos de otras empresas
-    pagos = _filtrar_por_tenant(pagos, tenant)
+    n_leidos = len(pagos)  # E-14w-e: radiografía del Informe Z
+    # E-14w: fuera los pagos de otras empresas (E-14w-e: solo CON token)
+    if con_token:
+        pagos = _filtrar_por_tenant(pagos, tenant)
+    n_tras_tenant = len(pagos)
     del_dia = []
     for p in pagos:
         fp = _fecha_de(p)
@@ -710,10 +778,12 @@ def cierre_de_caja(request: Request, fecha: Optional[str] = None):
                if p.get("ticket_no") is not None]
     horas = sorted([_fecha_de(p) for p in del_dia if _fecha_de(p) is not None])
     cfg = _config_dict()
-    return {"version": "E-14w-c", "tipo": "CIERRE DE CAJA (Informe Z)",
+    return {"version": "E-14w-e", "tipo": "CIERRE DE CAJA (Informe Z)",
             "fecha": f.strftime("%Y-%m-%d"),
             "generado_en": _now(),
             "n_pagos": len(del_dia),
+            "diag": {"con_token": bool(con_token), "tenant": tenant,
+                     "leidos": n_leidos, "tras_tenant": n_tras_tenant},
             "subtotal": round(sum(float(p.get("subtotal") or 0) for p in del_dia), 2),
             "propina": round(sum(float(p.get("tip") or 0) for p in del_dia), 2),
             "total": round(sum(float(p.get("total") or 0) for p in del_dia), 2),
@@ -747,17 +817,23 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
         raise HTTPException(404, f"Pago {pago_id} no encontrado")
     pago = dict(f)
     # E-14w: la tirilla de otro restaurante NO existe pa' ti (404)
+    # E-14w-e: sin header Authorization = modo consola local → sin 404
     te = _tenant_de_request(request)
-    # E-14w-c-b: antes de dar 404, la MISMA verdad de las órdenes — si el
-    # pago quedó mal marcado (backfill viejo / huérfano del demo) pero SUS
-    # órdenes son todas del que pide, se ADOPTA y la tirilla sale 🧾.
-    if str(pago.get("tenant_id") or "") != str(te or ""):
-        _reparar_dueno([pago], te)
-    if te is not None:
-        if str(pago.get("tenant_id") or "") != te:
+    con_token = str(getattr(request, "headers", {}).get("authorization")
+                    or "").lower().startswith("bearer ")
+    if con_token:
+        # E-14w-c-b: antes de dar 404, la MISMA verdad de las órdenes — si el
+        # pago quedó mal marcado (backfill viejo / huérfano del demo) pero SUS
+        # órdenes son todas del que pide, se ADOPTA y la tirilla sale 🧾.
+        # E-14w-e: la reparación SOLO corre con tenant resuelto — con
+        # te=None no hay dueño al cual adoptar (era un camino muerto).
+        if te is not None and str(pago.get("tenant_id") or "") != str(te):
+            _reparar_dueno([pago], te)
+        if te is not None:
+            if str(pago.get("tenant_id") or "") != te:
+                raise HTTPException(404, f"Pago {pago_id} no encontrado")
+        elif pago.get("tenant_id") not in (None, ""):
             raise HTTPException(404, f"Pago {pago_id} no encontrado")
-    elif pago.get("tenant_id") not in (None, ""):
-        raise HTTPException(404, f"Pago {pago_id} no encontrado")
 
     # Consecutivo perezoso: pagos viejos sin número lo reciben al verlos
     if pago.get("ticket_no") is None and _asegurar_ticket_no():
@@ -810,7 +886,7 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
         base, iva, total = subtotal, 0.0, round(subtotal + propina, 2)
 
     fp = _fecha_de(pago)
-    return {"version": "E-14w-c", "currency": "COP",
+    return {"version": "E-14w-e", "currency": "COP",
             "config": cfg,
             "pago": {"id": pago.get("id"),
                      "tirilla_no": _tirilla_no(pago.get("ticket_no")),
@@ -824,3 +900,7 @@ def factura_por_pago(pago_id: str, request: Request, db=Depends(_db)):
                         "propina": propina, "total": total,
                         "leyenda_iva": ("IVA incluido en los precios"
                                         if incluido else "IVA por agregar")}}
+
+
+# SELLO ANTI-CORTE: si en el chat NO ves esta línea, el archivo llegó cortado.
+_log("sección 5.d montada — pos_facturacion E-14w-e COMPLETO (fin del archivo)")
