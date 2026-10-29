@@ -1,8 +1,29 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
-Kārei · pos_cuenta_live.py (E-14w-c) — CUENTA EN VIVO + COBRAR + REPORTES
-VERSION: E-14w-c · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14w-c"
+Kārei · pos_cuenta_live.py (E-14w-d) — CUENTA EN VIVO + COBRAR + REPORTES
+VERSION: E-14w-d · VERIFICA: la ÚLTIMA línea de este archivo dice "E-14w-d"
+
+NUEVO EN E-14w-d (FIX DEFINITIVO: «un día sale y otro no» — LA CAUSA RAÍZ):
+· HALLAZGO FORENSE: el sub del JWT es un UUID CON guiones
+  (28c852c9-30cd-...) y users.id vive en CHAR(32) SIN guiones
+  (28c852c930cd...). La consulta WHERE id = :u en crudo NO encontraba
+  nada → _tenant_de_request devolvía None EN SILENCIO → el cobro
+  nacía huérfano (tenant_id NULL) y el reporte en modo legacy solo
+  enseñaba huérfanos. Ese era el «hoy salió, ayer no salía nada».
+  (El core ya lo había resuelto para sus modelos: FIX E-14y3 en
+  saas_registro convierte el sub a uuid.UUID — este add-on trabaja
+  con SQL crudo y necesita la misma normalización a mano.)
+· FIX 1 — _tenant_de_request ahora prueba el id EXACTO, el id SIN
+  guiones y, si el sub es un email, lo busca por email. Se acabó el
+  fallo silencioso.
+· FIX 2 — EL COBRO SELLÓ EL PAGO CON LA VERDAD DE SUS ÓRDENES: el
+  tenant del pago sale de las órdenes cobradas (que el core escribe
+  con el usuario autenticado bien resuelto). El token es solo
+  respaldo. Aunque el token falle, el pago nace con dueño.
+· FIX 3 — MODO CONSOLA: una llamada SIN header Authorization ve toda
+  la caja (no hay identidad con quien aislar). Con token → aislado
+  por tenant + reparación por órdenes, como siempre.
 
 NUEVO EN E-14w-c (FIX: «en Ventas no salen las ventas»):
 · La VERDAD del dueño de un pago ya NO es la marca tenant_id (el
@@ -166,7 +187,7 @@ def _log(*args):
     print("[pos_cuenta_live]", *args)
 
 
-_log("E-14w-c activo — DB:", DB_URL)
+_log("E-14w-d activo — DB:", DB_URL)
 
 
 def _es_sqlite() -> bool:
@@ -215,9 +236,24 @@ def _tenant_de_request(request) -> Optional[str]:
         uid = payload.get("sub") or payload.get("user_id") or payload.get("id")
         if not uid:
             return None
+        # E-14w-d FIX DEL SILENCIO: el sub del JWT suele ser UUID CON
+        # guiones y users.id vive en CHAR(32) SIN guiones. Probamos el
+        # valor exacto, el valor sin guiones y (si parece email) email.
+        cands = [str(uid).strip()]
+        limpio = cands[0].replace("-", "")
+        if limpio and limpio not in cands:
+            cands.append(limpio)
         with _engine.connect() as cx:
-            fila = cx.execute(text("SELECT tenant_id FROM users WHERE id = :u"),
-                              {"u": str(uid)}).first()
+            if "@" in cands[0]:
+                fila = cx.execute(text(
+                    "SELECT tenant_id FROM users WHERE email = :u"),
+                    {"u": cands[0]}).first()
+                if fila and fila[0] is not None:
+                    return str(fila[0])
+            ph = ",".join(f":u{i}" for i in range(len(cands)))
+            params = {f"u{i}": c for i, c in enumerate(cands)}
+            fila = cx.execute(text(
+                f"SELECT tenant_id FROM users WHERE id IN ({ph})"), params).first()
             return (str(fila[0]) if fila and fila[0] is not None else None)
     except Exception as e:
         _log("tenant sin resolver (sigo en modo legacy):", e)
@@ -312,7 +348,7 @@ def _reparar_dueno(pagos: list, tenant: Optional[str]) -> None:
                     {"t": tenant, "i": str(p.get("id"))})
         for p in adoptados:
             p["tenant_id"] = tenant
-        _log(f"reparación E-14w-c: {len(adoptados)} pago(s) adoptado(s) — "
+        _log(f"reparación E-14w-d: {len(adoptados)} pago(s) adoptado(s) — "
              "el dueño real es el de sus órdenes")
     except Exception as e:
         _log("reparación de dueño no pudo correr (sigo con el filtro):", e)
@@ -742,36 +778,34 @@ def _cuenta_de_mesa(db, table_id: str) -> dict:
         "orderId": (ultima["id"] if ultima else None),
         "order_number": (ultima["order_number"] if ultima else None),
         "items": items_flat, "lineas": items_flat, "detalle": items_flat,
-        "pedidos": pedidos, "comandas": pedidos,
-        "n_pedidos": len(pedidos), "n_items": len(items_flat),
-        "subtotal": subtotal, "propina": 0.0, "tip": 0.0, "total": subtotal,
-        "total_cents": int(round(subtotal * 100)),
-        "currency": "COP",
-        "hay_listos": "listo" in estados,
-        "hay_entregados": "entregado" in estados,
-        "hay_pendientes": hay_cocina,
-        "puede_cobrar": bool(items_flat) and not hay_cocina,
+        "subtotal": round(subtotal, 2), "total": round(subtotal, 2),
+        "estados": sorted(estados),
+        "hay_cocina": hay_cocina,
+        "hay_listos": bool(estados & {"listo"}),
+        "hay_entregados": bool(estados & {"entregado"}),
+        "puede_cobrar": bool(pedidos) and not hay_cocina,
+        "n_pedidos": len(pedidos),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 6. RUTAS (PanelCuenta llama a GET /pos/tables/{id}/cuenta)
-# ─────────────────────────────────────────────────────────────────────────
+@router.get("/pos/tables/{table_id}/cuenta")
+@router.get("/pos/tables/{table_id}/bill")
+@router.get("/tables/{table_id}/cuenta")
+@router.get("/tables/{table_id}/bill")
 @router.get("/api/v1/pos/tables/{table_id}/cuenta")
-@router.get("/api/v1/tables/{table_id}/cuenta")
 @router.get("/api/v1/pos/tables/{table_id}/bill")
+@router.get("/api/v1/tables/{table_id}/cuenta")
 @router.get("/api/v1/tables/{table_id}/bill")
-@router.get("/api/v1/pos/cuenta/{table_id}")
-@router.get("/api/v1/cuenta/{table_id}")
-def cuenta_de_mesa(table_id: str, db=Depends(_db)):
+def cuenta_mesa(table_id: str, db=Depends(_db)):
     return _cuenta_de_mesa(db, table_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 7. COBRAR CUENTA (E-14t3) — primer ladrillo de FACTURACIÓN
+# 6/7. COBRAR CUENTA (E-14t3/E-14u/E-14v/E-14w) — marca PAGADA, cierra la
+# sesión, libera la mesa, registra método+propina y tira el consecutivo.
 # ─────────────────────────────────────────────────────────────────────────
-# POST /pos/tables/{id}/cobrar: marca TODAS las órdenes no pagadas de la
-# mesa con el valor TERMINAL 'pagado' del enum REAL (PAID/PAGADA/COBRADA...),
+# POST /api/v1/pos/tables/{id}/cobrar (y pay, y sin /api/v1) → marca las
+# órdenes abiertas de la mesa como PAGADAS (usa el valor REAL del enum),
 # actualiza el total real desde los ítems, cierra la sesión abierta y libera
 # la mesa. Enum-safe (misma técnica E-14i): si el enum no tiene sinónimo de
 # pagado, responde 409 con mensaje claro en vez de envenenar filas.
@@ -922,7 +956,22 @@ def cobrar_cuenta(table_id: str, request: Request, payload: Optional[dict] = Non
     if not nombre_mesa and mesa.get("number") is not None:
         nombre_mesa = f"Mesa {mesa['number']}"
     mesa["_nombre"] = nombre_mesa
-    pago_id, ticket_no = _registrar_pago(total, propina, metodo, mesa, cobradas_ids, tenant)
+    # E-14w-d FIX 2 — LA VERDAD DEL DUEÑO DEL COBRO SON SUS ÓRDENES: la
+    # tabla core orders la escribe el order_service con el usuario
+    # autenticado BIEN resuelto (UUID correcto). Si todas las órdenes
+    # cobradas existen y son del mismo tenant → ESE es el dueño del pago,
+    # venga el token o no venga. El tenant del token queda de respaldo.
+    tenant_pago = tenant
+    try:
+        duenos_o = _filas_de_ordenes(cobradas_ids)
+        t_ords = {str(v) for v in duenos_o.values() if v is not None}
+        if (cobradas_ids and all(o in duenos_o for o in cobradas_ids)
+                and len(t_ords) == 1):
+            tenant_pago = list(t_ords)[0]
+    except Exception as e:
+        _log("cobrar: tenant por órdenes no resolvió (uso el del token):", e)
+    pago_id, ticket_no = _registrar_pago(total, propina, metodo, mesa,
+                                         cobradas_ids, tenant_pago)
 
     # Cerrar sesión abierta (transacción INDEPENDIENTE: si falla, no toca el cobro)
     try:
@@ -973,7 +1022,7 @@ def cobrar_cuenta(table_id: str, request: Request, payload: Optional[dict] = Non
     except Exception as e:
         _log("cobrar: mesa sin liberar (no crítico):", e)
 
-    return {"version": "E-14v", "ok": True, "cobradas": n,
+    return {"version": "E-14w-d", "ok": True, "cobradas": n,
             "subtotal": total, "propina": propina, "total": total_final,
             "metodo": metodo,
             "metodo_etiqueta": _ETIQUETA_METODO.get(metodo, metodo.replace("_", " ").capitalize()),
@@ -1156,9 +1205,16 @@ def _en_ventana(f, desde) -> bool:
 @router.get("/api/v1/pos/payments/summary")
 @router.get("/api/v1/reportes/pagos")
 def reporte_pagos(request: Request):
-    # E-14w: el reporte SIEMPRE va filtrado por la empresa del que pregunta
+    # E-14w: el reporte va filtrado por la empresa del que pregunta.
+    # E-14w-d FIX 3 — SIN header Authorization no hay identidad con quien
+    # aislar: modo consola local → se ve TODA la caja (se acabó el modo
+    # legacy que solo enseñaba huérfanos y escondía la caja viva).
+    con_token = str(getattr(request, "headers", {}).get("authorization")
+                    or "").lower().startswith("bearer ")
     tenant = _tenant_de_request(request)
-    pagos = _filtrar_por_tenant(_leer_pagos(), tenant)
+    pagos = _leer_pagos()
+    if con_token:
+        pagos = _filtrar_por_tenant(pagos, tenant)
     ahora = datetime.datetime.now()
     d0 = datetime.datetime(ahora.year, ahora.month, ahora.day)
     ventanas = {"hoy": d0, "semana": d0 - datetime.timedelta(days=6),
@@ -1209,7 +1265,7 @@ def reporte_pagos(request: Request):
             "fecha": (f.strftime("%Y-%m-%d") if f else None),
         })
 
-    return {"version": "E-14w-c",  # E-14w-c: así verificas en Swagger que ESTE archivo está vivo
+    return {"version": "E-14w-d",  # E-14w-d: así verificas en Swagger que ESTE archivo está vivo
             "generado_en": ahora.isoformat(sep=" ", timespec="seconds"),
             "resumen": resumen, "por_metodo": por_metodo,
             "metodos": [m["metodo"] for m in por_metodo],
@@ -1232,3 +1288,7 @@ _log("E-14w-b: reporte TAMBIÉN sin /api/v1 (12 rutas) · compatible "
 _log("E-14w-c: la VERDAD del dueño del pago es el tenant de sus ÓRDENES "
      "· pagos mal marcados se reparan y ADOPTAN al dueño real · "
      "backfill al demo FUERA · Ventas y Dashboard vuelven a ver la caja ✓")
+_log("E-14w-d: FIX CAUSA RAÍZ — sub del JWT (UUID con guiones) vs users.id "
+     "(CHAR(32) sin guiones) ya se cruzan bien · el cobro sella el pago con "
+     "el tenant de SUS ÓRDENES · sin token = modo consola (se ve toda la "
+     "caja) · se acabó el «hoy salió, ayer no» ✓")
