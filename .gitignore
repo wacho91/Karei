@@ -1,0 +1,19 @@
+# ===== Kārei E-14t66 — pega esto al FINAL del .gitignore del repo =====
+
+# Bases de datos locales (nunca subir ventas reales)
+*.db
+*.sqlite3
+apps/api/karei.db
+
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+.venv/
+
+# Builds del frontend
+dist/
+node_modules/
