@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ============================================================
- KĀREI · DIAGNÓSTICO FINO PRE-DESPLIEGUE · E-14t66
+ KĀREI · DIAGNÓSTICO FINO PRE-DESPLIEGUE · E-14t67
  SOLO LECTURA · no escribe en la base ni en el código
 ============================================================
 Qué mira (y por qué):
 
- [A] API VIVA ...... por qué openapi.json salió «no válido» en E-14t65
- [B] SECRET_KEY .... ¿el backend corre con llave por defecto?
- [C] HUÉRFANOS ..... ¿los 10 pagos sin orden son reales o falso
-                     positivo (texto '3' vs número 3)?
+ [A] API VIVA ...... openapi.json (en E-14t66 ya salió VÁLIDO ✓)
+ [B] JWT_SECRET .... ¿el backend corre con llave por defecto?
+                     (hallazgo E-14t66: tu config NO usa SECRET_KEY,
+                     usa jwt_secret → la variable se llama JWT_SECRET)
+ [C] HUÉRFANOS ..... ¿los pagos sin orden son reales o falso positivo?
+                     (FIX: ya no confunde el contador n_orders con una
+                     lista de órdenes, ni asume tenants.name)
  [D] INVENTARIO .... por qué NO bajan los gramos al vender
- [E] FRONTEND ...... los 9 localhost: ¿proxy dev, fallback o URL dura?
+ [E] FRONTEND ...... los localhost: ¿proxy dev, fallback o URL dura?
  [F] ZONA HORARIA .. las horas ingenuas línea por línea (material
                      para los parches America/Bogota)
  [G] GITIGNORE ..... que no se suban karei.db ni .env a GitHub
 
 Cómo correrlo (PowerShell, con la API PRENDIDA en otra ventana):
-   cd D:\Prime_TeamIA\proyectos_generados\Karei\apps\api
+   cd D:/Prime_TeamIA/proyectos_generados/Karei/apps/api
    python diagnostico_fino.py
+
+Novedades E-14t67:
+ · [C] ya no se estrella si tenants no tiene columna 'name' (tu caso).
+ · [C] ya no cuenta n_orders como si fuera una orden.
+ · Ninguna sección tumba al resto: si una falla, se anuncia y se sigue.
 
 Pega la salida COMPLETA en el chat.
 """
@@ -33,14 +41,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-SELLO = "E-14t66"
+SELLO = "E-14t67"
 API_URL = "http://localhost:8000"
 
 CLAVES_ENV = [
-    "SECRET_KEY", "DEBUG", "FRONTEND_URL", "DATABASE_URL",
-    "KAREI_SEED_DEMO", "KAREI_SMTP_HOST", "KAREI_SMTP_PORT",
-    "KAREI_SMTP_USER", "KAREI_SMTP_PASS", "KAREI_SMTP_FROM",
-    "KAREI_CORREO_MASTER",
+    "JWT_SECRET", "DEBUG", "FRONTEND_URL", "DATABASE_URL",
+    "KAREI_SEED_DEMO", "KAREI_CORREO_MASTER",
+    "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD",
+    "SMTP_FROM_EMAIL", "SMTP_FROM_NAME",
 ]
 
 PALABRAS_SECRETAS = re.compile(r"secret|jwt|token|passw|clave", re.I)
@@ -107,6 +115,19 @@ def probar_json(valor):
         except Exception:
             continue
     return [p for p in re.split(r"[,;|\s]+", texto) if p]
+
+
+def col_de(cols, candidatos):
+    """Elige la columna real de una tabla aunque el nombre varíe."""
+    bajos = [str(c).lower() for c in cols]
+    for cand in candidatos:
+        if cand in bajos:
+            return cols[bajos.index(cand)]
+    for cand in candidatos:
+        for i, c in enumerate(bajos):
+            if cand in c:
+                return cols[i]
+    return None
 
 
 def pedir(url: str, timeout: int = 6):
@@ -191,10 +212,10 @@ def seccion_api() -> None:
 
 
 # ============================================================
-# [B] SECRET_KEY Y VARIABLES
+# [B] JWT_SECRET Y VARIABLES
 # ============================================================
 def seccion_config(api: Path) -> None:
-    encabezado("[B] SECRET_KEY Y VARIABLES — valores ocultos")
+    encabezado("[B] JWT_SECRET Y VARIABLES — valores ocultos")
     envp = api / ".env"
     if envp.exists():
         definidas = {}
@@ -210,10 +231,18 @@ def seccion_config(api: Path) -> None:
                 print(f"      · {clave:<22} ✓ definida{extra}")
             else:
                 print(f"      · {clave:<22} [·] NO está")
-        R["secret_ok"] = bool(definidas.get("SECRET_KEY"))
+        R["secret_ok"] = bool(definidas.get("JWT_SECRET"))
+        if not R["secret_ok"]:
+            print("      [!] OJO: tu backend NO usa SECRET_KEY (eso buscaba la auditoría")
+            print("          E-14t65): usa jwt_secret → la variable se llama JWT_SECRET.")
+            print("          Genérala:  python -c \"import secrets; print(secrets.token_hex(32))\"")
+            print("          agrega al .env:  JWT_SECRET=<esa cadena>  → reinicia uvicorn.")
+            print("          Es normal que todos vuelvan a iniciar sesión una vez.")
     else:
         print("[!] No hay .env en el backend")
         R["secret_ok"] = False
+        print("    Créalo en la carpeta del backend con al menos:")
+        print("    JWT_SECRET=<cadena> · DEBUG=0 · FRONTEND_URL=<tu vercel> · DATABASE_URL=...")
 
     config = api / "app" / "core" / "config.py"
     if not config.exists():
@@ -225,17 +254,26 @@ def seccion_config(api: Path) -> None:
         print(f"      · Settings declara {len(campos)} campos:")
         print("        " + ", ".join(c[0] for c in campos))
     vacios = {"", '""', "''", "None", "null", "False"}
+    criticos = re.compile(r"secret|passw", re.I)
+    vidas = re.compile(r"token|minutes|days|hours|algorithm", re.I)
     for nombre, _tipo, default in campos:
-        if not PALABRAS_SECRETAS.search(nombre):
-            continue
         valor = (default or "").strip()
-        if valor and valor not in vacios:
-            print(f"      [!] '{nombre}' tiene VALOR POR DEFECTO en config.py → el backend")
-            print(f"          corre con llave conocida si no la defines. Define {nombre.upper()} sí o sí.")
-        else:
-            print(f"      · '{nombre}' sin default útil → obliga a definirla en .env ✓")
+        if criticos.search(nombre):
+            if valor and valor not in vacios:
+                print(f"      [!] '{nombre}' tiene VALOR POR DEFECTO en config.py → el backend")
+                print(f"          correría con llave CONOCIDA. Define {nombre.upper()} sí o sí.")
+            else:
+                print(f"      · '{nombre}' sin default útil → obliga a definirla en .env ✓")
+        elif vidas.search(nombre):
+            print(f"      · '{nombre}' con default ({valor or '—'}) → vida del token /")
+            print("          algoritmo, no es secreto: puede quedar así")
     prefijo = re.search(r"env_prefix\s*=\s*[\"']([^\"']*)[\"']", src)
     print(f"      · env_prefix: {prefijo.group(1) if prefijo else '(ninguno)'}")
+    if campos:
+        smtp_campos = [c[0] for c in campos if c[0].startswith("smtp")]
+        if smtp_campos:
+            print("      · para el correo en producción, las variables son: "
+                  + ", ".join(c.upper() for c in smtp_campos))
 
 
 # ============================================================
@@ -258,10 +296,17 @@ def seccion_huerfanos(api: Path) -> None:
     cols_pagos = [r[1] for r in cur.execute("PRAGMA table_info(karei_payments)")]
     cols_ord = [r[1] for r in cur.execute("PRAGMA table_info(orders)")]
     print(f"      · karei_payments columnas: {', '.join(cols_pagos)}")
+    # FIX E-14t67: solo columnas que parecen LISTA/LLAVE de ids (contienen "id").
+    # Antes 'n_orders' (un CONTADOR) entraba como referencia y cada pago con
+    # n_orders=1 parecía huérfano con la «orden 1» — falso veredicto garantizado.
     refs = [c for c in cols_pagos
-            if ("order" in c.lower() or "orden" in c.lower()) and c.lower() != "id"]
+            if c.lower() != "id" and "id" in c.lower()
+            and ("order" in c.lower() or "orden" in c.lower())]
     mapa_ord = {normalizar_id(r[0]): normalizar_id(r[0]) for r in cur.execute("SELECT id FROM orders")}
     print(f"      · órdenes en base: {len(mapa_ord)} · columnas de referencia en pagos: {refs or '(ninguna)'}")
+    contadores = [c for c in cols_pagos if re.search(r"(^n_|_n$|count)", c.lower())]
+    if contadores:
+        print(f"      · (contadores que NO cuento como órdenes: {contadores})")
 
     if not refs:
         lado = [c for c in cols_ord if "payment" in c.lower()]
@@ -299,8 +344,21 @@ def seccion_huerfanos(api: Path) -> None:
             f"SELECT id, {col_tenant_ord} FROM orders")}
     nombres_tenants = {}
     if "tenants" in tablas:
-        for tid, tnom in cur.execute("SELECT id, name FROM tenants"):
-            nombres_tenants[normalizar_id(tid)] = tnom
+        # FIX E-14t67: tu tabla tenants NO tiene columna 'name' — busco entre
+        # los nombres típicos y si no hay ninguno, muestro 'tenant <id>' sin morir.
+        try:
+            cols_ten = [r[1] for r in cur.execute("PRAGMA table_info(tenants)")]
+            col_nom_t = col_de(cols_ten, ["name", "nombre", "nombre_comercial",
+                                          "razon_social", "business_name",
+                                          "restaurant_name", "titulo", "title", "slug"])
+            if col_nom_t:
+                for tid, tnom in cur.execute(f"SELECT id, {col_nom_t} FROM tenants"):
+                    nombres_tenants[normalizar_id(tid)] = tnom
+            else:
+                for (tid,) in cur.execute("SELECT id FROM tenants"):
+                    nombres_tenants[normalizar_id(tid)] = f"tenant {tid}"
+        except sqlite3.Error as exc:
+            print(f"      · (nombres de tenants no disponibles: {exc})")
 
     huerfanos, desalineados = [], []
     for fila in filas:
@@ -345,7 +403,7 @@ def seccion_huerfanos(api: Path) -> None:
         for pid, sin in huerfanos:
             print(f"      · pago {pid} → sin orden: {sin}")
         print("    Si eran ventas de prueba borradas → se limpian. Si eran reales →")
-        print("    dime y preparamos el rescate (E-14t67).")
+        print("    dime y te preparo el rescate.")
         R["huerfanos"] = f"reales:{len(huerfanos)}"
     if desalineados:
         print(f"[!] {len(desalineados)} pago(s) cuyo DUEÑO no coincide con el dueño de sus órdenes:")
@@ -363,21 +421,11 @@ def seccion_huerfanos(api: Path) -> None:
     con.close()
 
 
+
+
 # ============================================================
 # [D] INVENTARIO — por qué no bajan los gramos
 # ============================================================
-def col_de(cols, candidatos):
-    bajos = [str(c).lower() for c in cols]
-    for cand in candidatos:
-        if cand in bajos:
-            return cols[bajos.index(cand)]
-    for cand in candidatos:
-        for i, c in enumerate(bajos):
-            if cand in c:
-                return cols[i]
-    return None
-
-
 def seccion_inventario(api: Path) -> None:
     encabezado("[D] INVENTARIO — por qué NO bajan los gramos al vender")
     db = api / "karei.db"
@@ -401,7 +449,9 @@ def seccion_inventario(api: Path) -> None:
 
     nombres_tenants = {}
     if "tenants" in tablas:
-        col_nom_t = col_de(cols["tenants"], ["name", "nombre"]) or "id"
+        col_nom_t = col_de(cols["tenants"], ["name", "nombre", "nombre_comercial",
+                                             "razon_social", "business_name",
+                                             "restaurant_name", "titulo", "title", "slug"]) or "id"
         for tid, tnom in cur.execute(f"SELECT id, {col_nom_t} FROM tenants"):
             nombres_tenants[normalizar_id(tid)] = tnom
 
@@ -733,7 +783,7 @@ def seccion_gitignore(api: Path) -> None:
 # VEREDICTO
 # ============================================================
 def veredicto() -> None:
-    encabezado("[VEREDICTO] E-14t66 — qué sigue")
+    encabezado(f"[VEREDICTO] {SELLO} — qué sigue")
     if R.get("openapi_ok"):
         print("  [✓] API viva y openapi válido → el bloqueador 1 cayó")
     elif R.get("api_viva"):
@@ -741,9 +791,11 @@ def veredicto() -> None:
     else:
         print("  [!] La API está apagada → prende uvicorn y vuelve a correr")
     if R.get("secret_ok"):
-        print("  [✓] SECRET_KEY definida en .env")
+        print("  [✓] JWT_SECRET definida en .env")
     else:
-        print("  [✗] SECRET_KEY NO está → genérala y agrégala (2 minutos, ver chat)")
+        print("  [✗] JWT_SECRET NO está en .env (es LA llave: tu config usa jwt_secret):")
+        print("      python -c \"import secrets; print(secrets.token_hex(32))\"")
+        print("      → agrega JWT_SECRET=<cadena> al .env y reinicia (2 minutos)")
     h = R.get("huerfanos")
     if h == "falso-positivo":
         print("  [✓] Huérfanos: falso positivo del detector — no hay que rescatar nada")
@@ -755,13 +807,11 @@ def veredicto() -> None:
     elif inv == "ventas-sin-receta":
         print("  [!] INVENTARIO: productos vendidos sin receta → sembrar recetas + parche de descuento")
     elif inv == "falta-descuento-en-codigo":
-        print("  [!] INVENTARIO: recetas OK pero el cobro no descuenta → parche de código (E-14t67)")
+        print("  [!] INVENTARIO: recetas OK pero el cobro no descuenta → parche de código")
     print()
     print("Pega esta salida COMPLETA en el chat: con ella te entrego el parche del")
-    print("inventario, los parches de zona horaria y los nombres exactos de variables")
-    print("para Railway.")
-    print()
-    print(f"Kārei {SELLO} · diagnóstico SOLO LECTURA · nada fue modificado")
+    print("inventario y los parches de zona horaria.")
+    print("(Las variables para Railway ya están en la chuleta env_produccion.txt E-14t67)")
 
 
 def main() -> None:
@@ -774,14 +824,27 @@ def main() -> None:
     print("=" * 74)
     api = resolver_base()
     print(f"Backend: {api}")
-    seccion_api()
-    seccion_config(api)
-    seccion_huerfanos(api)
-    seccion_inventario(api)
-    seccion_frontend(api)
-    seccion_hora(api)
-    seccion_gitignore(api)
-    veredicto()
+    pasos = [
+        ("A", seccion_api, ()),
+        ("B", seccion_config, (api,)),
+        ("C", seccion_huerfanos, (api,)),
+        ("D", seccion_inventario, (api,)),
+        ("E", seccion_frontend, (api,)),
+        ("F", seccion_hora, (api,)),
+        ("G", seccion_gitignore, (api,)),
+    ]
+    for letra, fn, args in pasos:
+        try:
+            fn(*args)
+        except Exception as exc:
+            print(f"\n[✗] La sección [{letra}] falló con {exc.__class__.__name__}: {exc}")
+            print("    Sigo con las demás secciones — pégame la salida igual, sirve.")
+    try:
+        veredicto()
+    except Exception as exc:
+        print(f"\n[✗] El veredicto falló con {exc.__class__.__name__}: {exc}")
+    print()
+    print(f"Kārei {SELLO} · diagnóstico SOLO LECTURA · nada fue modificado")
 
 
 if __name__ == "__main__":
